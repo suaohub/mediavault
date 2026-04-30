@@ -689,18 +689,12 @@ document.addEventListener('drop', e => {
   handleDrop(e.dataTransfer)
 })
 
-// Input buttons
-function wireInput(btnId, inputId, folder = false) {
-  const btn   = $(btnId)
-  const input = $(inputId)
-  if (folder) input.setAttribute('webkitdirectory', '')
-  btn.onclick = () => input.click()
-  input.onchange = () => {
-    if (input.files?.length) importPairs(filesToPairs(input.files))
-    input.value = ''
-  }
-}
-wireInput('btn-files',  'input-files')
-wireInput('btn-folder', 'input-folder', true)
-wireInput('es-files-btn', 'input-files')
-wireInput('es-folder-btn', 'input-folder', true)
+// File inputs — labels in HTML handle the click, just listen to change
+$('input-files').addEventListener('change', function() {
+  if (this.files?.length) importPairs(filesToPairs(this.files))
+  this.value = ''
+})
+$('input-folder').addEventListener('change', function() {
+  if (this.files?.length) importPairs(filesToPairs(this.files))
+  this.value = ''
+})

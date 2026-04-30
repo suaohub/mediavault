@@ -29,19 +29,19 @@
       </div>
     </div>
 
-    <button class="btn btn-ghost" id="btn-files">
+    <label class="btn btn-ghost" id="btn-files" for="input-files">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       Files
-    </button>
-    <button class="btn btn-ghost" id="btn-folder">
+    </label>
+    <label class="btn btn-ghost" id="btn-folder" for="input-folder">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       Folder
-    </button>
-    <button class="btn btn-pri" id="btn-add">+ Add</button>
+    </label>
+    <label class="btn btn-pri" id="btn-add" for="input-files">+ Add</label>
   </div>
 
-  <input id="input-files"  type="file" multiple accept="video/*,audio/*,.mkv,.flv,.ts,.flac,.opus" hidden />
-  <input id="input-folder" type="file" multiple hidden />
+  <input id="input-files"  type="file" multiple accept="video/*,audio/*,.mkv,.flv,.ts,.flac,.opus" style="display:none" />
+  <input id="input-folder" type="file" multiple webkitdirectory style="display:none" />
 </header>
 
 <!-- ── Subbar ──────────────────────────────────────────────────── -->
@@ -79,8 +79,8 @@
     <h2>Import your media</h2>
     <p>Drag & drop files or folders here, or use the buttons above.</p>
     <div class="empty-actions">
-      <button class="btn btn-pri" id="es-files-btn">Select Files</button>
-      <button class="btn btn-ghost" id="es-folder-btn">Select Folder</button>
+      <label class="btn btn-pri" for="input-files">Select Files</label>
+      <label class="btn btn-ghost" for="input-folder">Select Folder</label>
     </div>
     <div class="empty-fmts">
       <span class="fmt">MP4</span><span class="fmt">MOV</span><span class="fmt">MKV</span>

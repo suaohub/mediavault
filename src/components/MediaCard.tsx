@@ -50,20 +50,30 @@ function IcoVol({ muted }: { muted: boolean }) {
 
 const SEEK_SECS: Record<number, number> = { 1: 20, 1.5: 13, 2: 10, 3: 6.5, 4: 5 }
 
+/** How long to stay "active" after leaving the viewport before unloading (ms).
+ *  Prevents rapid load/unload when the user scrolls slowly past a card. */
+const UNLOAD_DELAY = 800
+
+/** How long to wait after an IntersectionObserver change before acting (ms).
+ *  Prevents reacting to momentary scroll bounces. */
+const ENTER_DEBOUNCE  = 120
+const LEAVE_DEBOUNCE  = 300
+
 function MediaCard({ item, previewSpeed, onOpen }: Props) {
   const cardRef  = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  // Refs hold live values for use inside async event callbacks (avoid stale closures)
-  const inViewRef  = useRef(false)
-  const hoveredRef = useRef(false)
-  const speedRef   = useRef(previewSpeed)
+  // Refs hold live values for use inside async callbacks (avoid stale closures)
+  const inViewRef      = useRef(false)
+  const hoveredRef     = useRef(false)
+  const speedRef       = useRef(previewSpeed)
+  const enterTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const leaveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const unloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [inView,       setInView]       = useState(false)
   const [hovered,      setHovered]      = useState(false)
-  /** true = src attribute is set, video is loading / playing */
   const [srcActive,    setSrcActive]    = useState(false)
-  /** true = enough data to display, fade video over thumbnail */
   const [videoVisible, setVideoVisible] = useState(false)
 
   /* ── Keep refs in sync ── */
@@ -71,14 +81,40 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
   useEffect(() => { hoveredRef.current = hovered }, [hovered])
   useEffect(() => { speedRef.current   = previewSpeed }, [previewSpeed])
 
-  /* ── IntersectionObserver ── */
+  /* ── IntersectionObserver with debounce ── */
   useEffect(() => {
     const io = new IntersectionObserver(
-      ([e]) => setInView(e.isIntersecting),
+      ([e]) => {
+        const entering = e.isIntersecting
+
+        if (entering) {
+          // Cancel any pending leave / unload timers
+          if (leaveTimerRef.current)  { clearTimeout(leaveTimerRef.current);  leaveTimerRef.current  = null }
+          if (unloadTimerRef.current) { clearTimeout(unloadTimerRef.current); unloadTimerRef.current = null }
+
+          // Short debounce so a quick scroll-through doesn't trigger load
+          enterTimerRef.current = setTimeout(() => {
+            setInView(true)
+          }, ENTER_DEBOUNCE)
+        } else {
+          // Cancel pending enter timer (card left before debounce fired)
+          if (enterTimerRef.current) { clearTimeout(enterTimerRef.current); enterTimerRef.current = null }
+
+          // Debounce the leave so small scroll jitter doesn't unload immediately
+          leaveTimerRef.current = setTimeout(() => {
+            setInView(false)
+          }, LEAVE_DEBOUNCE)
+        }
+      },
       { threshold: 0.1 }
     )
     if (cardRef.current) io.observe(cardRef.current)
-    return () => io.disconnect()
+    return () => {
+      io.disconnect()
+      if (enterTimerRef.current)  clearTimeout(enterTimerRef.current)
+      if (leaveTimerRef.current)  clearTimeout(leaveTimerRef.current)
+      if (unloadTimerRef.current) clearTimeout(unloadTimerRef.current)
+    }
   }, [])
 
   /* ── Viewport enter / leave ── */
@@ -86,22 +122,21 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
     if (item.mediaType !== 'video') return
 
     if (inView) {
-      // Activate src → React will set src={item.url} on next render
+      // Cancel any pending unload
+      if (unloadTimerRef.current) { clearTimeout(unloadTimerRef.current); unloadTimerRef.current = null }
       setSrcActive(true)
     } else {
-      // ① pause immediately
-      const v = videoRef.current
-      if (v) {
-        v.pause()
-        // ② clear src — browser stops decode pipeline
-        v.src = ''
-        // ③ load() with empty src forces the browser to fully release
-        //    all decoded frame buffers and network resources
-        v.load()
-      }
-      // ④ reset state so thumbnail shows again
-      setSrcActive(false)
-      setVideoVisible(false)
+      // Delay unloading so upward scroll doesn't cause flicker when user scrolls back
+      unloadTimerRef.current = setTimeout(() => {
+        const v = videoRef.current
+        if (v) {
+          v.pause()
+          v.src = ''
+          v.load()
+        }
+        setSrcActive(false)
+        setVideoVisible(false)
+      }, UNLOAD_DELAY)
     }
   }, [inView, item.mediaType])
 
@@ -110,41 +145,45 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
     const v = videoRef.current
     if (!v || !srcActive) return
 
-    // src is already set in the DOM at this point (React rendered first).
-    // Configure and kick off playback; canplay will confirm data is ready.
+    // Hovering → 1× speed; otherwise use global preview speed
     v.muted = !hoveredRef.current
-    v.playbackRate = speedRef.current
-    v.play().catch(() => {/* autoplay policy may block; canplay will retry */})
+    v.playbackRate = hoveredRef.current ? 1 : speedRef.current
+    v.play().catch(() => {})
 
     const onCanPlay = () => {
-      // Guard: card might have left viewport between src set and canplay
       if (!inViewRef.current) return
       setVideoVisible(true)
-      // Retry play in case the initial call above was rejected
       v.play().catch(() => {})
     }
-
     v.addEventListener('canplay', onCanPlay, { once: true })
     return () => v.removeEventListener('canplay', onCanPlay)
   }, [srcActive])
 
-  /* ── Hover: mute / unmute while in view ── */
+  /* ── Hover enter: unmute + drop to 1× speed ── */
   useEffect(() => {
     const v = videoRef.current
     if (!v || !srcActive) return
-    v.muted = !hovered
+    if (hovered) {
+      v.muted = false
+      v.playbackRate = 1
+    } else {
+      v.muted = true
+      v.playbackRate = speedRef.current
+    }
   }, [hovered, srcActive])
 
-  /* ── Speed: update playback rate while in view ── */
+  /* ── Global speed change (only applies when not hovered) ── */
   useEffect(() => {
     const v = videoRef.current
-    if (!v || !srcActive) return
+    if (!v || !srcActive || hovered) return
     v.playbackRate = previewSpeed
-  }, [previewSpeed, srcActive])
+  }, [previewSpeed, srcActive, hovered])
 
-  const seekDur = SEEK_SECS[previewSpeed] ?? 6.5
-  const isVideo = item.mediaType === 'video'
-  const playing = inView && isVideo
+  // When hovered, always show 1× in the badge; otherwise show global speed
+  const displaySpeed = hovered ? 1 : previewSpeed
+  const seekDur      = SEEK_SECS[displaySpeed] ?? 6.5
+  const isVideo      = item.mediaType === 'video'
+  const playing      = inView && isVideo
 
   return (
     <div
@@ -158,7 +197,6 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
       <div className={`thumb ${item.aspectClass}`}>
         {isVideo ? (
           <>
-            {/* Thumbnail — always present as fallback while video loads/unloads */}
             {item.thumbnail
               ? <img
                   className="thumb-img"
@@ -169,13 +207,11 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
               : <div className="thumb-placeholder" />
             }
 
-            {/* Video element — src is only set when card is in viewport.
-                Clearing src + calling load() releases decoded frame buffers. */}
             <video
               ref={videoRef}
               className={`thumb-video ${videoVisible ? 'visible' : ''}`}
               src={srcActive ? item.url : undefined}
-              muted   /* React attribute; actual mute toggled via ref imperatively */
+              muted
               loop
               playsInline
               preload="none"
@@ -185,7 +221,7 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
             <div className="vol-ind" title={hovered ? '播放声音中' : '悬停播放声音'}>
               <IcoVol muted={!hovered} />
             </div>
-            <span className="spd-b">{previewSpeed}×</span>
+            <span className="spd-b">{displaySpeed}×</span>
             <div className="prog-bar"><div className="prog-fill" /></div>
           </>
         ) : (

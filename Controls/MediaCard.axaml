@@ -12,12 +12,12 @@
 
     <Panel>
 
-      <!-- ── Static thumbnail ─────────────────────────────────────── -->
+      <!-- ── Static thumbnail (generated offline via TakeSnapshot) ──── -->
       <Image x:Name="ThumbImage"
              Source="{Binding Thumbnail}"
              Stretch="UniformToFill" />
 
-      <!-- ── Loading skeleton ─────────────────────────────────────── -->
+      <!-- ── Loading skeleton ──────────────────────────────────────── -->
       <Border IsVisible="{Binding IsLoadingThumbnail}"
               Background="{DynamicResource CardSkeletonBg}">
         <TextBlock Text="⋯"
@@ -26,11 +26,6 @@
                    Foreground="{DynamicResource TextMuted}"
                    FontSize="24" />
       </Border>
-
-      <!-- ── Live video preview frame (memory-render) ─────────────── -->
-      <Image x:Name="PreviewImage"
-             Stretch="UniformToFill"
-             IsVisible="False" />
 
       <!-- ── Audio placeholder ─────────────────────────────────────── -->
       <Border IsVisible="False" x:Name="AudioBadge"

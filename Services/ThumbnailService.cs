@@ -1,34 +1,38 @@
 using System;
-using System.Runtime.InteropServices;
+using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using Avalonia;
 using Avalonia.Media.Imaging;
-using Avalonia.Platform;
 using LibVLCSharp.Shared;
 using MediaVault.Models;
 
 namespace MediaVault.Services;
 
 /// <summary>
-/// Async thumbnail extraction backed by LibVLC memory-output callbacks.
-/// A single sequential reader avoids saturating the decoder.
+/// Extracts video thumbnails using LibVLC's built-in TakeSnapshot API.
+/// This avoids all native memory-callback plumbing and is safe across GPU drivers.
+/// Snapshots are cached as .jpg files in the system temp directory.
 /// </summary>
 public sealed class ThumbnailService : IDisposable
 {
     private readonly Channel<(MediaFile, TaskCompletionSource<Bitmap?>)> _channel;
     private readonly CancellationTokenSource _cts = new();
+    private readonly string _cacheDir;
 
-    private const uint ThumbW = 320;
-    private const uint ThumbH = 180;
+    // Limit concurrency: only 1 snapshot at a time to avoid GPU/driver contention
+    private const int ThumbW = 320;
+    private const int ThumbH = 180;
 
     public ThumbnailService()
     {
+        _cacheDir = Path.Combine(Path.GetTempPath(), "MediaVault_Thumbs");
+        Directory.CreateDirectory(_cacheDir);
+
         _channel = Channel.CreateBounded<(MediaFile, TaskCompletionSource<Bitmap?>)>(
-            new BoundedChannelOptions(100)
+            new BoundedChannelOptions(200)
             {
-                FullMode    = BoundedChannelFullMode.DropOldest,
+                FullMode     = BoundedChannelFullMode.DropOldest,
                 SingleReader = true
             });
 
@@ -49,9 +53,9 @@ public sealed class ThumbnailService : IDisposable
             if (ct.IsCancellationRequested) break;
             try
             {
-                var bmp = file.MediaType == Models.MediaType.Video
-                    ? await ExtractFrameAsync(file.FilePath, ct)
-                    : null;
+                Bitmap? bmp = null;
+                if (file.MediaType == Models.MediaType.Video)
+                    bmp = await Task.Run(() => ExtractSnapshot(file), ct);
                 tcs.TrySetResult(bmp);
             }
             catch (Exception ex)
@@ -61,96 +65,85 @@ public sealed class ThumbnailService : IDisposable
         }
     }
 
-    private static async Task<Bitmap?> ExtractFrameAsync(string path, CancellationToken ct)
+    private Bitmap? ExtractSnapshot(MediaFile file)
     {
-        long durationMs = 0;
-        try
-        {
-            using var probe = new Media(VlcService.Instance, path, FromType.FromPath);
-            await probe.Parse(MediaParseOptions.ParseLocal)
-                       .WaitAsync(TimeSpan.FromSeconds(8), ct);
-            durationMs = probe.Duration;
-        }
-        catch { /* fall through — capture first available frame */ }
+        // Use a stable filename so we don't re-extract on every launch
+        var hash   = Math.Abs(file.FilePath.GetHashCode()).ToString("x8");
+        var outPath = Path.Combine(_cacheDir, $"{hash}.jpg");
 
-        var frameTcs  = new TaskCompletionSource<byte[]?>();
-        var pixBuf    = new byte[ThumbW * ThumbH * 4];
-        var handle    = GCHandle.Alloc(pixBuf, GCHandleType.Pinned);
-        var bufPtr    = handle.AddrOfPinnedObject();
-        var captured  = 0;
-        MediaPlayer? mp = null;
+        if (!System.IO.File.Exists(outPath))
+            RenderSnapshot(file.FilePath, outPath);
+
+        if (!System.IO.File.Exists(outPath)) return null;
 
         try
         {
-            using var media = new Media(VlcService.Instance, path, FromType.FromPath);
-            mp = new MediaPlayer(media);
-
-            mp.SetVideoFormat("BGRA", ThumbW, ThumbH, ThumbW * 4);
-
-            // ── All callbacks must be exception-safe: any unhandled exception
-            //    inside a native callback will crash the process. ─────────────
-            mp.SetVideoCallbacks(
-                lockCb: (_, planes) =>
-                {
-                    try
-                    {
-                        if (planes != IntPtr.Zero)
-                            Marshal.WriteIntPtr(planes, bufPtr);
-                    }
-                    catch { /* ignore */ }
-                    return IntPtr.Zero;
-                },
-                unlockCb: null,
-                displayCb: (_, _) =>
-                {
-                    if (Interlocked.Exchange(ref captured, 1) != 0) return;
-                    try
-                    {
-                        var copy = new byte[pixBuf.Length];
-                        Buffer.BlockCopy(pixBuf, 0, copy, 0, copy.Length);
-                        frameTcs.TrySetResult(copy);
-                    }
-                    catch { frameTcs.TrySetResult(null); }
-                });
-
-            mp.Play();
-
-            if (durationMs > 2000)
-            {
-                await Task.Delay(700, ct).ConfigureAwait(false);
-                try { mp.Time = (long)(durationMs * 0.1); } catch { }
-            }
-
-            var data = await frameTcs.Task
-                           .WaitAsync(TimeSpan.FromSeconds(12), ct)
-                           .ConfigureAwait(false);
-
-            return data is null ? null : BgraToWriteableBitmap(data);
+            // Load into memory then release the file handle immediately
+            using var stream = System.IO.File.OpenRead(outPath);
+            return new Bitmap(stream);
         }
         catch { return null; }
-        finally
-        {
-            // Always stop the player before freeing the pinned buffer to
-            // prevent the native callback from accessing freed memory.
-            try { mp?.Stop(); }    catch { }
-            try { mp?.Dispose(); } catch { }
-
-            if (handle.IsAllocated)
-                handle.Free();
-        }
     }
 
-    private static WriteableBitmap BgraToWriteableBitmap(byte[] data)
+    private static void RenderSnapshot(string videoPath, string outPath)
     {
-        var wb = new WriteableBitmap(
-            new PixelSize((int)ThumbW, (int)ThumbH),
-            new Vector(96, 96),
-            PixelFormat.Bgra8888,
-            AlphaFormat.Opaque);
+        // Use a dedicated LibVLC instance with software rendering to avoid
+        // GPU driver issues entirely (--vout=dummy forces software path).
+        using var vlc = new LibVLC(
+            "--quiet",
+            "--no-audio",
+            "--no-osd",
+            "--no-video-title-show",
+            "--verbose=0",
+            "--vout=dummy");          // software-only, no GPU/DirectX involved
 
-        using var fb = wb.Lock();
-        Marshal.Copy(data, 0, fb.Address, data.Length);
-        return wb;
+        using var media  = new Media(vlc, videoPath, FromType.FromPath);
+        using var player = new MediaPlayer(vlc);
+
+        player.Media = media;
+
+        // Mute and play briefly to reach a decodeable frame
+        player.Volume = 0;
+
+        var ready = new ManualResetEventSlim(false);
+        long seekTarget = 0;
+
+        player.Playing += (_, _) =>
+        {
+            try
+            {
+                // Seek to 10 % into the video once we know the duration
+                var dur = player.Length;
+                if (dur > 2000)
+                    seekTarget = (long)(dur * 0.10);
+                ready.Set();
+            }
+            catch { ready.Set(); }
+        };
+
+        player.Play();
+
+        // Wait for playing state (max 8 s)
+        if (!ready.Wait(8000)) goto cleanup;
+
+        if (seekTarget > 0)
+        {
+            player.Time = seekTarget;
+            Thread.Sleep(600);   // let the decoder reach the seek position
+        }
+        else
+        {
+            Thread.Sleep(500);
+        }
+
+        // TakeSnapshot writes directly to disk — no memory buffers, no callbacks
+        player.TakeSnapshot(0, outPath, (uint)ThumbW, (uint)ThumbH);
+
+        // Small delay so the file is fully flushed before we return
+        Thread.Sleep(300);
+
+        cleanup:
+        try { player.Stop(); }  catch { }
     }
 
     public void Dispose()

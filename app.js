@@ -234,7 +234,13 @@ async function importPairs(pairs) {
       if (t) {
         item.thumb = t
         const img = document.querySelector(`[data-id="${item.id}"] .thumb-img`)
-        if (img) { img.src = t; img.hidden = false }
+        if (img) {
+          img.src = t
+          img.hidden = false
+          // Remove placeholder once thumbnail is ready
+          const ph = img.closest('.thumb')?.querySelector('.thumb-placeholder')
+          if (ph) ph.style.opacity = '0'
+        }
       }
       setProgress(90 + Math.round((vidItems.length - thumbQ.length) / vidItems.length * 10))
     }
@@ -246,73 +252,64 @@ async function importPairs(pairs) {
 }
 
 /* ═══════════════════════════════════════════════════
-   VIDEO STATE MACHINE  — per card, pure DOM
-   Each video element goes through:
-     idle → loading → playing / paused
-   src is set ONCE on first entry and never cleared.
+   CARD — thumbnail-first, hover-to-preview
+   Default: static thumbnail only (zero video decode cost)
+   Hover:   create <video>, play inline at preview speed (muted)
+   Click:   fullscreen player
    ═══════════════════════════════════════════════════ */
 
-// Global IntersectionObserver — one observer for all cards (efficient)
-const playObserver = new IntersectionObserver(entries => {
-  for (const e of entries) {
-    const card = e.target
-    const vid  = card._vid
-    if (!vid) continue
+function startPreview(card, item) {
+  if (card._vid) return            // already running
+  card.classList.add('playing')
 
-    if (e.isIntersecting) {
-      card.classList.add('playing')
-      // Set src on first sight
-      if (!vid.src) {
-        vid.src = card._url
-        vid.load()
-      }
-      vid.muted = !card._hovered
-      vid.playbackRate = card._hovered ? 1 : state.speed
-      vid.play().catch(() => {})
-    } else {
-      card.classList.remove('playing')
-      vid.pause()
-      // src intentionally NOT cleared — buffer preserved for scroll-back
-    }
-  }
-}, { threshold: 0.05 })
+  const vid = document.createElement('video')
+  vid.className    = 'thumb-video'
+  vid.muted        = true
+  vid.loop         = true
+  vid.playsInline  = true
+  vid.preload      = 'auto'
+  vid.playbackRate = state.speed
+  card._vid = vid
+
+  // Fade in over thumbnail once first frame is ready
+  vid.addEventListener('canplay', () => vid.classList.add('visible'), { once: true })
+
+  card.querySelector('.thumb').prepend(vid)
+  vid.src = item.url
+  vid.play().catch(() => {})
+
+  // Show speed badge
+  const spd = card.querySelector('.spd-b')
+  if (spd) spd.textContent = state.speed + '×'
+}
+
+function stopPreview(card) {
+  const vid = card._vid
+  if (!vid) return
+  card.classList.remove('playing')
+  vid.pause()
+  vid.src = ''
+  vid.remove()
+  card._vid = null
+}
 
 function makeCard(item) {
   const card = document.createElement('div')
   card.className = 'card'
-  card.dataset.id = item.id
+  card.dataset.id     = item.id
   card.dataset.folder = item.folder
-  card.dataset.type = item.type
-  card._url = item.url
-  card._hovered = false
-
-  const seekDur = SEEK_SECS[state.speed] ?? 6.5
-  card.style.setProperty('--seek', seekDur + 's')
+  card.dataset.type   = item.type
+  card._vid = null
 
   if (item.type === 'video') {
-    const vid = document.createElement('video')
-    vid.muted = true; vid.loop = true; vid.playsInline = true; vid.preload = 'none'
-    vid.className = 'thumb-video'
-    // Show video overlay once first frame decoded
-    vid.addEventListener('canplay', () => {
-      vid.classList.add('visible')
-    }, { once: true })
-    card._vid = vid
-
     card.innerHTML = `
       <div class="thumb ${item.asp}">
         <div class="thumb-placeholder"></div>
-        <img class="thumb-img" hidden alt="" />
+        <img class="thumb-img"${item.thumb ? ` src="${item.thumb}"` : ' hidden'} alt="" />
         <div class="thumb-ov"><div class="play-ring"></div></div>
-        <div class="vol-ind">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
-          </svg>
-        </div>
         <span class="badge bv">Video</span>
         ${item.dur ? `<span class="dur-b">${fmtDur(item.dur)}</span>` : ''}
-        <span class="spd-b">${state.speed}×</span>
+        <span class="spd-b" style="opacity:0">${state.speed}×</span>
         <div class="prog-bar"><div class="prog-fill"></div></div>
       </div>
       <div class="info">
@@ -320,42 +317,21 @@ function makeCard(item) {
         <div class="info-meta">
           <span>${fmtSize(item.size)}</span>
           ${item.dur ? `<span>·</span><span>${fmtDur(item.dur)}</span>` : ''}
-          ${item.w ? `<span>·</span><span>${item.w}×${item.h}</span>` : ''}
+          ${item.w  ? `<span>·</span><span>${item.w}×${item.h}</span>` : ''}
         </div>
       </div>`
 
-    card.querySelector('.thumb').prepend(vid)
-
-    // Hover: unmute + 1× speed
-    card.addEventListener('mouseenter', () => {
-      card._hovered = true
-      updateVolIcon(card, false)
-      if (card._vid.src) {
-        card._vid.muted = false
-        card._vid.playbackRate = 1
-        card.querySelector('.spd-b').textContent = '1×'
-      }
-    })
-    card.addEventListener('mouseleave', () => {
-      card._hovered = false
-      updateVolIcon(card, true)
-      if (card._vid.src) {
-        card._vid.muted = true
-        card._vid.playbackRate = state.speed
-        card.querySelector('.spd-b').textContent = state.speed + '×'
-      }
-    })
-
-    playObserver.observe(card)
+    card.addEventListener('mouseenter', () => startPreview(card, item))
+    card.addEventListener('mouseleave', () => stopPreview(card))
 
   } else {
-    // Audio card
+    // Audio card — waveform animation, no video
     const delays = [0,.15,.3,.45,.6,.45,.3,.15,0]
     card.innerHTML = `
       <div class="thumb r1x1">
         <div class="audio-bg">
           <span class="mus-note">♫</span>
-          <div class="waves">${delays.map((d,i) => `<div class="wbar" style="animation-delay:${d}s"></div>`).join('')}</div>
+          <div class="waves">${delays.map(d => `<div class="wbar" style="animation-delay:${d}s"></div>`).join('')}</div>
         </div>
         <div class="play-dot"></div>
         <span class="badge ba">Audio</span>
@@ -369,23 +345,12 @@ function makeCard(item) {
         </div>
       </div>`
 
-    // Audio: animate waveform when in view
-    const audioObserver = new IntersectionObserver(([e]) => {
-      card.classList.toggle('playing', e.isIntersecting)
-    }, { threshold: 0.1 })
-    audioObserver.observe(card)
+    const ao = new IntersectionObserver(([e]) => card.classList.toggle('playing', e.isIntersecting), { threshold: 0.1 })
+    ao.observe(card)
   }
 
   card.addEventListener('click', () => openPlayer(item))
   return card
-}
-
-function updateVolIcon(card, muted) {
-  const vi = card.querySelector('.vol-ind')
-  if (!vi) return
-  vi.innerHTML = muted
-    ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`
-    : `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`
 }
 
 function appendCard(item) {
@@ -411,8 +376,8 @@ function isItemVisible(item) {
 }
 
 function rebuildGrid() {
-  // Disconnect all video observers before clearing
-  grid.querySelectorAll('.card[data-type="video"]').forEach(c => playObserver.unobserve(c))
+  // Stop any active preview before clearing
+  grid.querySelectorAll('.card[data-type="video"]').forEach(c => stopPreview(c))
   grid.innerHTML = ''
 
   const visible = state.items.filter(isItemVisible)
@@ -465,8 +430,9 @@ function applySpeed(s) {
   grid.querySelectorAll('.card[data-type="video"]').forEach(card => {
     card.style.setProperty('--seek', seekDur + 's')
     const spd = card.querySelector('.spd-b')
-    if (spd && !card._hovered) spd.textContent = s + '×'
-    if (card._vid && !card._hovered) card._vid.playbackRate = s
+    if (spd) spd.textContent = s + '×'
+    // Update rate on any card currently being previewed (hovered)
+    if (card._vid) card._vid.playbackRate = s
   })
 }
 

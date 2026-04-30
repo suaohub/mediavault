@@ -294,9 +294,11 @@ function startPreview(card, item) {
   vid.playsInline  = true
   vid.preload      = 'auto'
   vid.playbackRate = state.speed
-  card._vid        = vid
+  // 提示浏览器使用硬件解码器（GPU 解码）
+  vid.setAttribute('x-webkit-airplay', 'deny')
+  vid.disablePictureInPicture = true
+  card._vid = vid
 
-  // 等首帧就绪后淡入并播放，避免 play() 在未加载时被浏览器拒绝
   vid.addEventListener('canplay', () => {
     vid.playbackRate = state.speed
     vid.play().catch(() => {})
@@ -306,7 +308,6 @@ function startPreview(card, item) {
     const spd = card.querySelector('.spd-b')
     if (spd) { spd.textContent = state.speed + '×'; spd.style.opacity = '1' }
 
-    // 进度条：直接用 JS 驱动宽度，避免 CSS animation 反复 restart
     startProgBar(card, vid)
   }, { once: true })
 
@@ -335,12 +336,17 @@ function stopPreview(card) {
 
 function startProgBar(card, vid) {
   cancelAnimationFrame(card._raf)
+  let lastT = 0
 
-  function tick() {
+  function tick(now) {
     if (!card._vid || vid !== card._vid) return
-    const fill = card.querySelector('.prog-fill')
-    if (fill && vid.duration) {
-      fill.style.width = (vid.currentTime / vid.duration * 100) + '%'
+    // 约 8fps 更新进度条，减少主线程占用
+    if (now - lastT > 120) {
+      lastT = now
+      const fill = card.querySelector('.prog-fill')
+      if (fill && vid.duration) {
+        fill.style.width = (vid.currentTime / vid.duration * 100) + '%'
+      }
     }
     card._raf = requestAnimationFrame(tick)
   }
@@ -608,8 +614,13 @@ function updatePlayerIdx() {
 }
 
 // Time / progress
+let _lastTimeUpdate = 0
 playerVid.addEventListener('timeupdate', () => {
   if (dragActive || !playerVid.duration) return
+  const now = performance.now()
+  // 约 5fps 更新播放器进度条，timeupdate 本身 4-5 次/秒无需每次都 DOM 操作
+  if (now - _lastTimeUpdate < 200) return
+  _lastTimeUpdate = now
   const pct = playerVid.currentTime / playerVid.duration * 100
   pmProg.style.width  = pct + '%'
   pmThumb.style.left  = pct + '%'
@@ -832,3 +843,27 @@ $('input-folder').addEventListener('change', function() {
   if (this.files?.length) importPairs(filesToPairs(this.files))
   this.value = ''
 })
+
+/* ═══════════════════════════════════════════════════
+   GPU 性能优化：滚动时暂停所有卡片 rAF，减少主线程占用
+   ═══════════════════════════════════════════════════ */
+let _scrollTimer = null
+let _scrolling   = false
+
+window.addEventListener('scroll', () => {
+  if (!_scrolling) {
+    _scrolling = true
+    // 滚动开始：暂停所有卡片进度条 rAF
+    grid.querySelectorAll('.card[data-type="video"]').forEach(c => {
+      if (c._raf) { cancelAnimationFrame(c._raf); c._raf = null; c._rafPaused = true }
+    })
+  }
+  clearTimeout(_scrollTimer)
+  _scrollTimer = setTimeout(() => {
+    _scrolling = false
+    // 滚动结束：恢复正在预览的卡片 rAF
+    grid.querySelectorAll('.card[data-type="video"]').forEach(c => {
+      if (c._rafPaused && c._vid) { c._rafPaused = false; startProgBar(c, c._vid) }
+    })
+  }, 150)
+}, { passive: true })

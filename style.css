@@ -5,6 +5,33 @@
 :focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 4px; }
 
 /* ═══════════════════════════════════════════
+   GPU 性能优化
+   - 把频繁变化的元素提升到独立合成层（GPU 处理）
+   - 用 contain 限制重排/重绘范围
+   - 减少主线程 layout 触发
+═══════════════════════════════════════════ */
+/* 整体页面开启 GPU 加速文字渲染 */
+body { -webkit-font-smoothing: antialiased; text-rendering: optimizeSpeed; }
+
+/* 视频元素强制独立合成层，解码和渲染全走 GPU */
+video {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* 卡片网格：限制重排范围，滚动时只重绘可见区 */
+.grid {
+  contain: layout style;
+}
+
+/* 每张卡片独立合成层，hover 动画不影响其他卡片 */
+.card {
+  contain: layout style paint;
+  transform: translateZ(0);
+}
+
+/* ═══════════════════════════════════════════
    THEMES
 ═══════════════════════════════════════════ */
 :root, [data-theme="dark"] {
@@ -159,12 +186,15 @@ body {
 #hdr {
   position: fixed; top: 0; left: 0; right: 0; height: 56px;
   background: var(--hdr);
-  backdrop-filter: blur(32px) saturate(180%);
-  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
   border-bottom: 1px solid var(--bd);
   display: flex; align-items: center; padding: 0 18px; gap: 12px;
   z-index: 500;
   transition: background .3s, border-color .3s;
+  /* 独立合成层，避免模糊计算触发全页重绘 */
+  will-change: backdrop-filter;
+  transform: translateZ(0);
 }
 
 /* Logo */
@@ -313,12 +343,14 @@ body {
 #subbar {
   position: fixed; top: 56px; left: 0; right: 0; height: 42px;
   background: var(--sub);
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
   border-bottom: 1px solid var(--bd);
   display: flex; align-items: center; padding: 0 18px; gap: 10px;
   z-index: 499;
   transition: background .3s, border-color .3s;
+  will-change: backdrop-filter;
+  transform: translateZ(0);
 }
 #stat-txt { font-size: 11.5px; color: var(--tx2); flex-shrink: 0; white-space: nowrap; }
 #stat-txt b { color: var(--tx); font-weight: 600; }
@@ -608,7 +640,7 @@ body {
   position: absolute; inset: 14px; border-radius: 18px;
   background: var(--ac-dim);
   border: 2px dashed var(--ac);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(8px);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
   animation: pulse 2s ease infinite;
 }

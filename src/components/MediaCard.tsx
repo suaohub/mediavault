@@ -8,6 +8,7 @@ interface Props {
   onOpen: (item: MediaFile) => void
 }
 
+/* ── Animated audio waveform ── */
 const WBAR_DELAYS = [0, .15, .3, .45, .6, .45, .3, .15, 0]
 
 function AudioVisual({ playing }: { playing: boolean }) {
@@ -16,17 +17,22 @@ function AudioVisual({ playing }: { playing: boolean }) {
       <span className="mus-note">♫</span>
       <div className="waves">
         {WBAR_DELAYS.map((d, i) => (
-          <div key={i} className="wbar" style={{
-            height: '42px',
-            animationDelay: `${d}s`,
-            animationPlayState: playing ? 'running' : 'paused',
-          }} />
+          <div
+            key={i}
+            className="wbar"
+            style={{
+              height: '42px',
+              animationDelay: `${d}s`,
+              animationPlayState: playing ? 'running' : 'paused',
+            }}
+          />
         ))}
       </div>
     </div>
   )
 }
 
+/* ── Volume icon ── */
 function IcoVol({ muted }: { muted: boolean }) {
   return muted ? (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -44,81 +50,119 @@ function IcoVol({ muted }: { muted: boolean }) {
 
 const SEEK_SECS: Record<number, number> = { 1: 20, 1.5: 13, 2: 10, 3: 6.5, 4: 5 }
 
+/** How long to stay "active" after leaving the viewport before unloading (ms).
+ *  Prevents rapid load/unload when the user scrolls slowly past a card. */
+const UNLOAD_DELAY = 800
+
+/** How long to wait after an IntersectionObserver change before acting (ms).
+ *  Prevents reacting to momentary scroll bounces. */
+const ENTER_DEBOUNCE  = 120
+const LEAVE_DEBOUNCE  = 300
+
 function MediaCard({ item, previewSpeed, onOpen }: Props) {
   const cardRef  = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  const hoveredRef = useRef(false)
-  const speedRef   = useRef(previewSpeed)
-  const hotRef     = useRef(false)
+  // Refs hold live values for use inside async callbacks (avoid stale closures)
+  const inViewRef      = useRef(false)
+  const hoveredRef     = useRef(false)
+  const speedRef       = useRef(previewSpeed)
+  const enterTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const leaveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const unloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const [inView,  setInView]  = useState(false)
-  const [hovered, setHovered] = useState(false)
-  // videoVisible: controlled imperatively to avoid timing issues with canplay
-  const videoVisibleRef = useRef(false)
-  const [videoVisible,  setVideoVisible] = useState(false)
+  const [inView,       setInView]       = useState(false)
+  const [hovered,      setHovered]      = useState(false)
+  const [srcActive,    setSrcActive]    = useState(false)
+  const [videoVisible, setVideoVisible] = useState(false)
 
+  /* ── Keep refs in sync ── */
+  useEffect(() => { inViewRef.current  = inView  }, [inView])
   useEffect(() => { hoveredRef.current = hovered }, [hovered])
   useEffect(() => { speedRef.current   = previewSpeed }, [previewSpeed])
 
-  /* ── Core: try to play a video element imperatively ── */
-  function tryPlay(v: HTMLVideoElement) {
-    v.muted = !hoveredRef.current
-    v.playbackRate = hoveredRef.current ? 1 : speedRef.current
+  /* ── IntersectionObserver with debounce ── */
+  useEffect(() => {
+    const io = new IntersectionObserver(
+      ([e]) => {
+        const entering = e.isIntersecting
 
-    if (v.readyState >= 3) {
-      // Already has enough data — show immediately
-      if (!videoVisibleRef.current) {
-        videoVisibleRef.current = true
-        setVideoVisible(true)
-      }
-      v.play().catch(() => {})
-    } else {
-      // Wait for data; use both canplay and canplaythrough for reliability
-      const onReady = () => {
-        if (!videoVisibleRef.current) {
-          videoVisibleRef.current = true
-          setVideoVisible(true)
+        if (entering) {
+          // Cancel any pending leave / unload timers
+          if (leaveTimerRef.current)  { clearTimeout(leaveTimerRef.current);  leaveTimerRef.current  = null }
+          if (unloadTimerRef.current) { clearTimeout(unloadTimerRef.current); unloadTimerRef.current = null }
+
+          // Short debounce so a quick scroll-through doesn't trigger load
+          enterTimerRef.current = setTimeout(() => {
+            setInView(true)
+          }, ENTER_DEBOUNCE)
+        } else {
+          // Cancel pending enter timer (card left before debounce fired)
+          if (enterTimerRef.current) { clearTimeout(enterTimerRef.current); enterTimerRef.current = null }
+
+          // Debounce the leave so small scroll jitter doesn't unload immediately
+          leaveTimerRef.current = setTimeout(() => {
+            setInView(false)
+          }, LEAVE_DEBOUNCE)
         }
-        v.play().catch(() => {})
-      }
-      v.addEventListener('canplay', onReady, { once: true })
+      },
+      { threshold: 0.1 }
+    )
+    if (cardRef.current) io.observe(cardRef.current)
+    return () => {
+      io.disconnect()
+      if (enterTimerRef.current)  clearTimeout(enterTimerRef.current)
+      if (leaveTimerRef.current)  clearTimeout(leaveTimerRef.current)
+      if (unloadTimerRef.current) clearTimeout(unloadTimerRef.current)
     }
-  }
+  }, [])
 
-  /* ── Viewport observer ── */
+  /* ── Viewport enter / leave ── */
   useEffect(() => {
     if (item.mediaType !== 'video') return
 
-    const io = new IntersectionObserver(([e]) => {
-      const visible = e.isIntersecting
-      setInView(visible)
-
-      const v = videoRef.current
-      if (!v) return
-
-      if (visible) {
-        if (!hotRef.current) {
-          // First time in viewport: set src then play
-          hotRef.current = true
-          v.src = item.url
+    if (inView) {
+      // Cancel any pending unload
+      if (unloadTimerRef.current) { clearTimeout(unloadTimerRef.current); unloadTimerRef.current = null }
+      setSrcActive(true)
+    } else {
+      // Delay unloading so upward scroll doesn't cause flicker when user scrolls back
+      unloadTimerRef.current = setTimeout(() => {
+        const v = videoRef.current
+        if (v) {
+          v.pause()
+          v.src = ''
           v.load()
         }
-        tryPlay(v)
-      } else {
-        v.pause()
-      }
-    }, { threshold: 0.05 })
+        setSrcActive(false)
+        setVideoVisible(false)
+      }, UNLOAD_DELAY)
+    }
+  }, [inView, item.mediaType])
 
-    if (cardRef.current) io.observe(cardRef.current)
-    return () => io.disconnect()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.mediaType, item.url])
-
-  /* ── Hover: unmute + 1× ── */
+  /* ── Start playback once src becomes active ── */
   useEffect(() => {
     const v = videoRef.current
-    if (!v) return
+    if (!v || !srcActive) return
+
+    // Hovering → 1× speed; otherwise use global preview speed
+    v.muted = !hoveredRef.current
+    v.playbackRate = hoveredRef.current ? 1 : speedRef.current
+    v.play().catch(() => {})
+
+    const onCanPlay = () => {
+      if (!inViewRef.current) return
+      setVideoVisible(true)
+      v.play().catch(() => {})
+    }
+    v.addEventListener('canplay', onCanPlay, { once: true })
+    return () => v.removeEventListener('canplay', onCanPlay)
+  }, [srcActive])
+
+  /* ── Hover enter: unmute + drop to 1× speed ── */
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || !srcActive) return
     if (hovered) {
       v.muted = false
       v.playbackRate = 1
@@ -126,15 +170,16 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
       v.muted = true
       v.playbackRate = speedRef.current
     }
-  }, [hovered])
+  }, [hovered, srcActive])
 
-  /* ── Global speed (skip when hovered) ── */
+  /* ── Global speed change (only applies when not hovered) ── */
   useEffect(() => {
     const v = videoRef.current
-    if (!v || hovered) return
+    if (!v || !srcActive || hovered) return
     v.playbackRate = previewSpeed
-  }, [previewSpeed, hovered])
+  }, [previewSpeed, srcActive, hovered])
 
+  // When hovered, always show 1× in the badge; otherwise show global speed
   const displaySpeed = hovered ? 1 : previewSpeed
   const seekDur      = SEEK_SECS[displaySpeed] ?? 6.5
   const isVideo      = item.mediaType === 'video'
@@ -162,14 +207,14 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
               : <div className="thumb-placeholder" />
             }
 
-            {/* No src in JSX — managed imperatively to avoid React re-render timing issues */}
             <video
               ref={videoRef}
               className={`thumb-video ${videoVisible ? 'visible' : ''}`}
+              src={srcActive ? item.url : undefined}
               muted
               loop
               playsInline
-              preload="auto"
+              preload="none"
             />
 
             <div className="thumb-ov"><div className="play-ring" /></div>

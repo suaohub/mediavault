@@ -1,13 +1,147 @@
-<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%236366f1'/><polygon points='36,28 72,50 36,72' fill='white'/></svg>" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MediaVault</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediaVault</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────── -->
+<header id="hdr">
+  <div class="logo"><span class="logo-mark"></span>MediaVault</div>
+
+  <div class="search-wrap">
+    <svg class="search-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="22" y2="22"/></svg>
+    <input id="search-input" type="text" placeholder="Search…" autocomplete="off" />
+    <button id="search-clear" class="search-x" title="Clear">✕</button>
+  </div>
+
+  <div class="h-right">
+    <div class="theme-wrap" id="theme-wrap">
+      <button class="btn btn-ghost icon-btn" id="theme-btn" title="Theme">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+      </button>
+      <div class="theme-pop" id="theme-pop" hidden>
+        <div class="theme-pop-hd">Theme</div>
+        <div class="theme-grid" id="theme-grid"></div>
+      </div>
+    </div>
+
+    <button class="btn btn-ghost" id="btn-files">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      Files
+    </button>
+    <button class="btn btn-ghost" id="btn-folder">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      Folder
+    </button>
+    <button class="btn btn-pri" id="btn-add">+ Add</button>
+  </div>
+
+  <input id="input-files"  type="file" multiple accept="video/*,audio/*,.mkv,.flv,.ts,.flac,.opus" hidden />
+  <input id="input-folder" type="file" multiple hidden />
+</header>
+
+<!-- ── Subbar ──────────────────────────────────────────────────── -->
+<div id="subbar">
+  <span id="stat-txt"></span>
+
+  <div class="chips-row" id="type-chips">
+    <button class="chip on" data-filter="all">All</button>
+    <button class="chip" data-filter="video">Video</button>
+    <button class="chip" data-filter="audio">Audio</button>
+    <button class="chip" data-filter="recent">Recent</button>
+  </div>
+
+  <div class="chip-div"></div>
+  <div id="folder-chips" class="chips-row"></div>
+
+  <div class="chip-div"></div>
+  <div class="spd-wrap" id="spd-wrap">
+    <button class="spd-btn" id="spd-btn">
+      <span class="spd-dot"></span>Speed <span class="spd-val" id="spd-val">3×</span>
+    </button>
+    <div class="spd-pop" id="spd-pop" hidden>
+      <span class="spd-opt" data-spd="1">1×</span>
+      <span class="spd-opt" data-spd="1.5">1.5×</span>
+      <span class="spd-opt on" data-spd="3">3×</span>
+      <span class="spd-opt" data-spd="4">4×</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Main ────────────────────────────────────────────────────── -->
+<main id="main">
+  <div id="empty-state" class="empty">
+    <div class="empty-icon">🎬</div>
+    <h2>Import your media</h2>
+    <p>Drag & drop files or folders here, or use the buttons above.</p>
+    <div class="empty-actions">
+      <button class="btn btn-pri" id="es-files-btn">Select Files</button>
+      <button class="btn btn-ghost" id="es-folder-btn">Select Folder</button>
+    </div>
+    <div class="empty-fmts">
+      <span class="fmt">MP4</span><span class="fmt">MOV</span><span class="fmt">MKV</span>
+      <span class="fmt">WEBM</span><span class="fmt">AVI</span><span class="fmt">MP3</span>
+      <span class="fmt">FLAC</span><span class="fmt">WAV</span><span class="fmt">M4A</span>
+    </div>
+  </div>
+  <div id="grid" class="grid" hidden></div>
+</main>
+
+<!-- ── Drop overlay ────────────────────────────────────────────── -->
+<div id="drop-ov" class="drop-ov">
+  <div class="drop-ov-inner">
+    <span class="drop-emoji">🎬</span>
+    <h2>Drop to import</h2>
+    <p>Videos &amp; audio files supported</p>
+  </div>
+</div>
+
+<!-- ── Player modal ────────────────────────────────────────────── -->
+<div id="player" class="player" hidden>
+  <video id="player-video" playsinline></video>
+  <div class="player-overlay" id="player-overlay">
+    <div class="player-top">
+      <button class="pm-close" id="pm-close">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+      <span class="pm-title" id="pm-title"></span>
+    </div>
+    <div class="player-bottom">
+      <div class="pm-prog-row">
+        <span id="pm-cur">0:00</span>
+        <div class="pm-track" id="pm-track">
+          <div class="pm-prog" id="pm-prog"></div>
+          <div class="pm-thumb" id="pm-thumb"></div>
+        </div>
+        <span id="pm-dur">0:00</span>
+      </div>
+      <div class="pm-ctrl-row">
+        <button class="pmb" id="pm-prev" title="Previous">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"/></svg>
+        </button>
+        <button class="pmb pmb-lg" id="pm-play">
+          <svg id="pm-play-ico" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>
+        <button class="pmb" id="pm-next" title="Next">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/></svg>
+        </button>
+        <div class="pm-vol">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          <div class="pm-vt" id="pm-vt"><div class="pm-vf" id="pm-vf"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="pm-spinner" id="pm-spinner" hidden></div>
+</div>
+
+<!-- ── Loading bar ─────────────────────────────────────────────── -->
+<div id="loading-bar" class="loading-bar" style="width:0"></div>
+
+<script type="module" src="app.js"></script>
+</body>
 </html>

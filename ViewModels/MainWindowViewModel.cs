@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MediaVault.Models;
@@ -84,9 +85,14 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         try
         {
             var files = await MediaImportService.ImportFilesAsync(paths);
-            MergeFiles(files);
+            // MergeFiles touches UI-bound ObservableCollections — must run on the UI thread,
+            // regardless of which thread the awaited import returned on.
+            await Dispatcher.UIThread.InvokeAsync(() => MergeFiles(files));
         }
-        finally { IsImporting = false; }
+        finally
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => IsImporting = false);
+        }
     }
 
     public async Task AddFolderAsync(string folderPath)
@@ -95,10 +101,16 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         try
         {
             var (files, folderIds) = await MediaImportService.ImportFolderAsync(folderPath);
-            foreach (var fid in folderIds) EnsureFolder(fid);
-            MergeFiles(files);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                foreach (var fid in folderIds) EnsureFolder(fid);
+                MergeFiles(files);
+            });
         }
-        finally { IsImporting = false; }
+        finally
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => IsImporting = false);
+        }
     }
 
     private void MergeFiles(IEnumerable<MediaFile> files)

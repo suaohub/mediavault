@@ -1,9 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "MediaVault 默认窗口权限",
-  "windows": ["main"],
-  "permissions": [
-    "core:default"
-  ]
-}

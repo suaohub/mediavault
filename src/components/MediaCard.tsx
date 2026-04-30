@@ -50,68 +50,70 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
 
   const hoveredRef = useRef(false)
   const speedRef   = useRef(previewSpeed)
-  const hotRef     = useRef(false)   // once true, src is never cleared
+  const hotRef     = useRef(false)
 
-  const [hot,          setHot]          = useState(false)   // src ever activated
-  const [inView,       setInView]       = useState(false)   // currently in viewport
-  const [hovered,      setHovered]      = useState(false)
-  const [videoVisible, setVideoVisible] = useState(false)
+  const [inView,  setInView]  = useState(false)
+  const [hovered, setHovered] = useState(false)
+  // videoVisible: controlled imperatively to avoid timing issues with canplay
+  const videoVisibleRef = useRef(false)
+  const [videoVisible,  setVideoVisible] = useState(false)
 
   useEffect(() => { hoveredRef.current = hovered }, [hovered])
   useEffect(() => { speedRef.current   = previewSpeed }, [previewSpeed])
 
-  /* ── Single observer: viewport only ── */
+  /* ── Core: try to play a video element imperatively ── */
+  function tryPlay(v: HTMLVideoElement) {
+    v.muted = !hoveredRef.current
+    v.playbackRate = hoveredRef.current ? 1 : speedRef.current
+
+    if (v.readyState >= 3) {
+      // Already has enough data — show immediately
+      if (!videoVisibleRef.current) {
+        videoVisibleRef.current = true
+        setVideoVisible(true)
+      }
+      v.play().catch(() => {})
+    } else {
+      // Wait for data; use both canplay and canplaythrough for reliability
+      const onReady = () => {
+        if (!videoVisibleRef.current) {
+          videoVisibleRef.current = true
+          setVideoVisible(true)
+        }
+        v.play().catch(() => {})
+      }
+      v.addEventListener('canplay', onReady, { once: true })
+    }
+  }
+
+  /* ── Viewport observer ── */
   useEffect(() => {
     if (item.mediaType !== 'video') return
 
-    const io = new IntersectionObserver(
-      ([e]) => {
-        const visible = e.isIntersecting
-        setInView(visible)
+    const io = new IntersectionObserver(([e]) => {
+      const visible = e.isIntersecting
+      setInView(visible)
 
-        if (visible && !hotRef.current) {
-          // First time entering viewport → activate src, never unload again
+      const v = videoRef.current
+      if (!v) return
+
+      if (visible) {
+        if (!hotRef.current) {
+          // First time in viewport: set src then play
           hotRef.current = true
-          setHot(true)
+          v.src = item.url
+          v.load()
         }
-      },
-      { threshold: 0.05 }
-    )
+        tryPlay(v)
+      } else {
+        v.pause()
+      }
+    }, { threshold: 0.05 })
+
     if (cardRef.current) io.observe(cardRef.current)
     return () => io.disconnect()
-  }, [item.mediaType])
-
-  /* ── canplay: show video + start playing if still in view ── */
-  useEffect(() => {
-    if (!hot) return
-    const v = videoRef.current
-    if (!v) return
-
-    const onCanPlay = () => {
-      setVideoVisible(true)
-      if (inView) {
-        v.muted = !hoveredRef.current
-        v.playbackRate = hoveredRef.current ? 1 : speedRef.current
-        v.play().catch(() => {})
-      }
-    }
-    v.addEventListener('canplay', onCanPlay, { once: true })
-    return () => v.removeEventListener('canplay', onCanPlay)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hot])
-
-  /* ── Play / pause on viewport change ── */
-  useEffect(() => {
-    const v = videoRef.current
-    if (!v || !hot) return
-    if (inView) {
-      v.muted = !hoveredRef.current
-      v.playbackRate = hoveredRef.current ? 1 : speedRef.current
-      v.play().catch(() => {})
-    } else {
-      v.pause()
-    }
-  }, [inView, hot])
+  }, [item.mediaType, item.url])
 
   /* ── Hover: unmute + 1× ── */
   useEffect(() => {
@@ -160,10 +162,10 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
               : <div className="thumb-placeholder" />
             }
 
+            {/* No src in JSX — managed imperatively to avoid React re-render timing issues */}
             <video
               ref={videoRef}
               className={`thumb-video ${videoVisible ? 'visible' : ''}`}
-              src={hot ? item.url : undefined}
               muted
               loop
               playsInline

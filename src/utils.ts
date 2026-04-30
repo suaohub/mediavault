@@ -45,8 +45,32 @@ export function getAspectClass(w: number, h: number): AspectClass {
   if (r >= 1.55) return 'r16x9'
   if (r >= 1.1)  return 'r4x3'
   if (r >= 0.9)  return 'r1x1'
-  if (r >= 0.6)  return 'r4x3'  // portrait 4:3
+  if (r >= 0.6)  return 'r4x3'
   return 'r9x16'
+}
+
+/* ─────────────────────────────────────────
+   CONCURRENCY LIMITER
+   Run at most `limit` promises at a time.
+───────────────────────────────────────── */
+async function pLimit<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number,
+  onDone?: (result: T, index: number) => void
+): Promise<T[]> {
+  const results: T[] = new Array(tasks.length)
+  let next = 0
+
+  const worker = async () => {
+    while (next < tasks.length) {
+      const i = next++
+      results[i] = await tasks[i]()
+      onDone?.(results[i], i)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker))
+  return results
 }
 
 /* ─────────────────────────────────────────
@@ -107,7 +131,9 @@ export function probeAudio(file: File): Promise<number | null> {
 }
 
 /* ─────────────────────────────────────────
-   THUMBNAIL (video → base64 JPEG)
+   THUMBNAIL
+   Returns an objectURL pointing to a Blob (not a base64 DataURL).
+   Much faster to create, ~35% less memory, and can be precisely revoked.
 ───────────────────────────────────────── */
 export function captureThumbnail(file: File): Promise<string | null> {
   return new Promise((resolve) => {
@@ -132,13 +158,18 @@ export function captureThumbnail(file: File): Promise<string | null> {
 
     vid.addEventListener('seeked', () => {
       try {
-        const W = Math.min(vid.videoWidth, 640)
+        // Cap at 480px wide — enough for a card thumbnail, saves ~40% vs 640px
+        const W = Math.min(vid.videoWidth, 480)
         const H = Math.round(W * vid.videoHeight / vid.videoWidth)
         const canvas = document.createElement('canvas')
-        canvas.width = W
+        canvas.width  = W
         canvas.height = H
         canvas.getContext('2d')!.drawImage(vid, 0, 0, W, H)
-        finish(canvas.toDataURL('image/jpeg', 0.75))
+        canvas.toBlob(
+          blob => finish(blob ? URL.createObjectURL(blob) : null),
+          'image/jpeg',
+          0.72
+        )
       } catch {
         finish(null)
       }
@@ -153,15 +184,6 @@ export function captureThumbnail(file: File): Promise<string | null> {
 /* ─────────────────────────────────────────
    FOLDER TREE BUILDER
 ───────────────────────────────────────── */
-
-/**
- * Given a list of {file, relativePath} pairs, build a FolderNode tree
- * and return a map of file → folderId.
- *
- * relativePath examples:
- *   "Travel/2024/clip.mp4"      →  folder "Travel/2024"
- *   "video.mp4"                 →  folder "__root__"
- */
 export function buildFolderTree(pairs: { file: File; relativePath: string }[]): {
   roots: FolderNode[]
   fileToFolder: Map<File, string>
@@ -176,12 +198,10 @@ export function buildFolderTree(pairs: { file: File; relativePath: string }[]): 
     return nodeMap.get(id)!
   }
 
-  // Ensure root node exists
   getOrCreate('__root__', '未分类', null)
 
   for (const { file, relativePath } of pairs) {
     const parts = relativePath.split('/').filter(Boolean)
-    // Remove last part (filename)
     const folderParts = parts.slice(0, -1)
 
     if (folderParts.length === 0) {
@@ -207,13 +227,11 @@ export function buildFolderTree(pairs: { file: File; relativePath: string }[]): 
     fileToFolder.set(file, parentId ?? '__root__')
   }
 
-  // Build proper root list (nodes whose parentId is null, excluding __root__ itself if no direct-drop files)
   const roots: FolderNode[] = []
   for (const node of nodeMap.values()) {
     if (node.parentId === null) roots.push(node)
   }
 
-  // Sort roots: __root__ last
   roots.sort((a, b) => {
     if (a.id === '__root__') return 1
     if (b.id === '__root__') return -1
@@ -223,10 +241,6 @@ export function buildFolderTree(pairs: { file: File; relativePath: string }[]): 
   return { roots, fileToFolder }
 }
 
-/**
- * Merge a new folder tree into an existing one (same path-based IDs = same node).
- * Visibility state is preserved for existing nodes.
- */
 export function mergeFolderTrees(existing: FolderNode[], incoming: FolderNode[]): FolderNode[] {
   const existMap = new Map<string, FolderNode>()
   const flatten = (nodes: FolderNode[]) => {
@@ -276,7 +290,6 @@ async function readEntry(
     const reader = dirEntry.createReader()
     const allEntries: FileSystemEntry[] = []
 
-    // readEntries returns at most 100 at a time — loop until done
     const read = (): Promise<FileSystemEntry[]> =>
       new Promise((res, rej) => reader.readEntries(res, rej))
 
@@ -308,7 +321,6 @@ export async function readDroppedItems(dt: DataTransfer): Promise<{ file: File; 
   return results.flat()
 }
 
-/** For <input> file picker (with or without webkitdirectory) */
 export function readInputFiles(fileList: FileList): { file: File; relativePath: string }[] {
   return Array.from(fileList)
     .filter(isMediaFile)
@@ -318,56 +330,81 @@ export function readInputFiles(fileList: FileList): { file: File; relativePath: 
     }))
 }
 
-/* ─────────────────────────────────────────
-   PROCESS DROPPED / SELECTED FILES
-   Returns MediaFile[] + FolderNode[] ready to push to store
-───────────────────────────────────────── */
-export async function processFiles(
-  pairs: { file: File; relativePath: string }[]
-): Promise<{ mediaFiles: MediaFile[]; folders: FolderNode[] }> {
+/**
+ * Runs metadata probing and thumbnail generation in two separate concurrent
+ * phases, streaming results to the UI as they arrive.
+ */
+export async function processFilesStreamingV2(
+  pairs: { file: File; relativePath: string }[],
+  onBatch:     (files: MediaFile[], folders: FolderNode[]) => void,
+  onThumbnail: (id: string, url: string) => void,
+  signal?: AbortSignal
+): Promise<void> {
   const { roots, fileToFolder } = buildFolderTree(pairs)
 
-  const mediaFiles: MediaFile[] = await Promise.all(
-    pairs.map(async ({ file }) => {
-      const id = crypto.randomUUID()
-      const url = URL.createObjectURL(file)
-      const type = getMediaType(file)
-      const folderId = fileToFolder.get(file) ?? '__root__'
+  const PROBE_CONCURRENCY = 4
+  const THUMB_CONCURRENCY = 2
+  const BATCH_SIZE        = 8
 
-      let width: number | null = null
-      let height: number | null = null
-      let duration: number | null = null
-      let aspectClass: AspectClass = type === 'audio' ? 'r1x1' : 'r16x9'
+  // id → file mapping for thumbnail phase
+  const fileIdMap = new Map<File, string>()
 
-      if (type === 'video') {
-        const meta = await probeVideo(file)
-        if (meta) {
-          width = meta.width
-          height = meta.height
-          duration = meta.duration
-          aspectClass = meta.aspectClass
-        }
-      } else {
-        duration = await probeAudio(file)
-      }
+  // ── Phase 1: metadata ──
+  const pending: MediaFile[] = []
+  let foldersEmitted = false
 
-      return {
-        id,
-        name: file.name,
-        mediaType: type,
-        file,
-        url,
-        thumbnail: null,
-        duration,
-        width,
-        height,
-        aspectClass,
-        size: file.size,
-        folderId,
-        addedAt: Date.now(),
-      } satisfies MediaFile
-    })
-  )
+  const metaTasks = pairs.map(({ file }) => async (): Promise<MediaFile | null> => {
+    if (signal?.aborted) return null
 
-  return { mediaFiles, folders: roots }
+    const id   = crypto.randomUUID()
+    const url  = URL.createObjectURL(file)
+    const type = getMediaType(file)
+
+    fileIdMap.set(file, id)
+
+    let width: number | null       = null
+    let height: number | null      = null
+    let duration: number | null    = null
+    let aspectClass: AspectClass   = type === 'audio' ? 'r1x1' : 'r16x9'
+
+    if (type === 'video') {
+      const meta = await probeVideo(file)
+      if (meta) { width = meta.width; height = meta.height; duration = meta.duration; aspectClass = meta.aspectClass }
+    } else {
+      duration = await probeAudio(file)
+    }
+
+    return {
+      id, name: file.name, mediaType: type, file, url,
+      thumbnail: null, duration, width, height, aspectClass,
+      size: file.size, folderId: fileToFolder.get(file) ?? '__root__',
+      addedAt: Date.now(),
+    } satisfies MediaFile
+  })
+
+  await pLimit(metaTasks, PROBE_CONCURRENCY, (result) => {
+    if (!result || signal?.aborted) return
+    pending.push(result)
+
+    if (pending.length >= BATCH_SIZE) {
+      onBatch(pending.splice(0), foldersEmitted ? [] : roots)
+      foldersEmitted = true
+    }
+  })
+
+  if (pending.length > 0) {
+    onBatch(pending.splice(0), foldersEmitted ? [] : roots)
+  }
+
+  // ── Phase 2: thumbnails (only video files) ──
+  const videoPairs = pairs.filter(({ file }) => getMediaType(file) === 'video')
+  const thumbTasks2 = videoPairs.map(({ file }) => async () => {
+    if (signal?.aborted) return
+    const id = fileIdMap.get(file)
+    if (!id) return
+    const thumbUrl = await captureThumbnail(file)
+    if (thumbUrl) onThumbnail(id, thumbUrl)
+  })
+
+  await pLimit(thumbTasks2, THUMB_CONCURRENCY)
 }

@@ -8,7 +8,6 @@ interface Props {
   onOpen: (item: MediaFile) => void
 }
 
-/* ── Animated audio waveform ── */
 const WBAR_DELAYS = [0, .15, .3, .45, .6, .45, .3, .15, 0]
 
 function AudioVisual({ playing }: { playing: boolean }) {
@@ -28,7 +27,6 @@ function AudioVisual({ playing }: { playing: boolean }) {
   )
 }
 
-/* ── Volume icon ── */
 function IcoVol({ muted }: { muted: boolean }) {
   return muted ? (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -47,134 +45,92 @@ function IcoVol({ muted }: { muted: boolean }) {
 const SEEK_SECS: Record<number, number> = { 1: 20, 1.5: 13, 2: 10, 3: 6.5, 4: 5 }
 
 /**
- * Two-zone loading strategy:
+ * Aggressive keep-all strategy:
+ * - src is set ONCE on mount and NEVER cleared — browser buffers all videos
+ * - Only play/pause is toggled based on viewport visibility
+ * - Viewport: real intersection (play) vs out-of-viewport (pause only)
+ * - Hover: unmute + 1× speed; leave: mute + global speed
  *
- *  ┌─────────────────────────────┐
- *  │  PRELOAD ZONE  (+200px top) │  ← src kept alive (preloaded / cached)
- *  ├─────────────────────────────┤
- *  │                             │
- *  │        VIEWPORT             │  ← playing + visible
- *  │                             │
- *  ├─────────────────────────────┤
- *  │  PRELOAD ZONE (+600px bot)  │  ← src preloaded, paused, ready to play
- *  └─────────────────────────────┘
- *
- * Cards inside the preload zone have their src set (network request made,
- * browser buffers frames) but are paused.  As soon as a card enters the
- * real viewport it starts playing.  When a card leaves the preload zone
- * the src is cleared after a short delay — this means the user has to
- * scroll at least ~200px past a card before it is evicted, eliminating
- * the "scroll up and it reloads" problem entirely.
+ * Memory cost: ~2-8 MB per video in browser decode buffer.
+ * With 100 videos × avg 4 MB = ~400 MB — acceptable on 24 GB RAM.
+ * The browser's own media cache handles memory pressure automatically
+ * by evicting buffers for paused out-of-viewport elements when needed.
  */
-const PRELOAD_MARGIN = '200px 0px 600px 0px'
-
-/** How long after leaving the preload zone before we actually clear src (ms).
- *  Extra safety net for fast back-scrolling. */
-const UNLOAD_DELAY = 1200
-
 function MediaCard({ item, previewSpeed, onOpen }: Props) {
   const cardRef  = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
 
-  // Refs for latest values — avoids stale closures in callbacks
-  const hoveredRef   = useRef(false)
-  const speedRef     = useRef(previewSpeed)
-  const inZoneRef    = useRef(false)   // inside preload zone
-  const inViewRef    = useRef(false)   // inside real viewport
-  const unloadTimer  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hoveredRef = useRef(false)
+  const speedRef   = useRef(previewSpeed)
 
-  const [inZone,       setInZone]       = useState(false)  // controls src
-  const [inView,       setInView]       = useState(false)  // controls play/pause
+  const [inView,       setInView]       = useState(false)
   const [hovered,      setHovered]      = useState(false)
-  const [srcActive,    setSrcActive]    = useState(false)
+  // True once the video has decoded enough to display (fades over thumbnail)
   const [videoVisible, setVideoVisible] = useState(false)
 
   useEffect(() => { hoveredRef.current = hovered }, [hovered])
   useEffect(() => { speedRef.current   = previewSpeed }, [previewSpeed])
-  useEffect(() => { inZoneRef.current  = inZone }, [inZone])
-  useEffect(() => { inViewRef.current  = inView }, [inView])
 
-  /* ── Observer 1: preload zone — controls src active ── */
-  useEffect(() => {
-    if (item.mediaType !== 'video') return
-
-    const io = new IntersectionObserver(
-      ([e]) => {
-        if (e.isIntersecting) {
-          if (unloadTimer.current) { clearTimeout(unloadTimer.current); unloadTimer.current = null }
-          setInZone(true)
-        } else {
-          // Delay unload — user might scroll back quickly
-          unloadTimer.current = setTimeout(() => setInZone(false), UNLOAD_DELAY)
-        }
-      },
-      { threshold: 0, rootMargin: PRELOAD_MARGIN }
-    )
-    if (cardRef.current) io.observe(cardRef.current)
-    return () => { io.disconnect(); clearTimeout(unloadTimer.current ?? undefined) }
-  }, [item.mediaType])
-
-  /* ── Observer 2: real viewport — controls play/pause ── */
+  /* ── Viewport observer — only controls play / pause ── */
   useEffect(() => {
     if (item.mediaType !== 'video') return
 
     const io = new IntersectionObserver(
       ([e]) => setInView(e.isIntersecting),
-      { threshold: 0.1 }
+      { threshold: 0.05 }
     )
     if (cardRef.current) io.observe(cardRef.current)
     return () => io.disconnect()
   }, [item.mediaType])
 
-  /* ── Activate / deactivate src based on zone ── */
+  /* ── One-time setup: attach src and canplay listener on mount ── */
   useEffect(() => {
     if (item.mediaType !== 'video') return
+    const v = videoRef.current
+    if (!v) return
 
-    if (inZone) {
-      setSrcActive(true)
-    } else {
-      const v = videoRef.current
-      if (v) { v.pause(); v.src = ''; v.load() }
-      setSrcActive(false)
-      setVideoVisible(false)
+    v.muted = true
+    v.playbackRate = speedRef.current
+    // preload="auto" tells the browser to start buffering immediately
+    v.preload = 'auto'
+
+    const onCanPlay = () => {
+      setVideoVisible(true)
+      // Only play if currently in viewport
+      if (inViewRef.current) v.play().catch(() => {})
     }
-  }, [inZone, item.mediaType])
+    v.addEventListener('canplay', onCanPlay, { once: true })
 
-  /* ── Play / pause based on real viewport visibility ── */
+    return () => {
+      // On unmount just pause — don't clear src, browser GC handles it
+      v.pause()
+    }
+  // Run only once on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Need a ref copy for the one-time canplay handler above
+  const inViewRef = useRef(false)
+  useEffect(() => { inViewRef.current = inView }, [inView])
+
+  /* ── Play / pause as card enters / leaves viewport ── */
   useEffect(() => {
     const v = videoRef.current
-    if (!v || !srcActive) return
+    if (!v || item.mediaType !== 'video') return
 
     if (inView) {
       v.muted = !hoveredRef.current
       v.playbackRate = hoveredRef.current ? 1 : speedRef.current
       v.play().catch(() => {})
     } else {
-      // Out of viewport but still in preload zone — keep src, just pause
       v.pause()
     }
-  }, [inView, srcActive])
+  }, [inView, item.mediaType])
 
-  /* ── Initial canplay handler (first time src is set) ── */
+  /* ── Hover: unmute + 1× ── */
   useEffect(() => {
     const v = videoRef.current
-    if (!v || !srcActive) return
-
-    v.muted = !hoveredRef.current
-    v.playbackRate = hoveredRef.current ? 1 : speedRef.current
-
-    const onCanPlay = () => {
-      setVideoVisible(true)
-      if (inViewRef.current) v.play().catch(() => {})
-    }
-    v.addEventListener('canplay', onCanPlay, { once: true })
-    return () => v.removeEventListener('canplay', onCanPlay)
-  }, [srcActive])
-
-  /* ── Hover: unmute + 1× speed ── */
-  useEffect(() => {
-    const v = videoRef.current
-    if (!v || !srcActive) return
+    if (!v) return
     if (hovered) {
       v.muted = false
       v.playbackRate = 1
@@ -182,23 +138,14 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
       v.muted = true
       v.playbackRate = speedRef.current
     }
-  }, [hovered, srcActive])
+  }, [hovered])
 
-  /* ── Global speed change (skip when hovered) ── */
+  /* ── Global speed (only when not hovered) ── */
   useEffect(() => {
     const v = videoRef.current
-    if (!v || !srcActive || hovered) return
+    if (!v || hovered) return
     v.playbackRate = previewSpeed
-  }, [previewSpeed, srcActive, hovered])
-
-  /* ── Cleanup on unmount ── */
-  useEffect(() => {
-    return () => {
-      const v = videoRef.current
-      if (v) { v.pause(); v.src = ''; v.load() }
-      clearTimeout(unloadTimer.current ?? undefined)
-    }
-  }, [])
+  }, [previewSpeed, hovered])
 
   const displaySpeed = hovered ? 1 : previewSpeed
   const seekDur      = SEEK_SECS[displaySpeed] ?? 6.5
@@ -227,10 +174,11 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
               : <div className="thumb-placeholder" />
             }
 
+            {/* src set permanently — never cleared after mount */}
             <video
               ref={videoRef}
               className={`thumb-video ${videoVisible ? 'visible' : ''}`}
-              src={srcActive ? item.url : undefined}
+              src={item.url}
               muted
               loop
               playsInline

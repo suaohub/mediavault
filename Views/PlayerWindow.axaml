@@ -1,0 +1,97 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MediaVault.ViewModels"
+        xmlns:vlc="using:LibVLCSharp.Avalonia"
+        x:Class="MediaVault.Views.PlayerWindow"
+        x:DataType="vm:PlayerViewModel"
+        Title="MediaVault Player"
+        Background="Black"
+        WindowState="Maximized"
+        SystemDecorations="None"
+        CanResize="True">
+
+  <Grid RowDefinitions="*,Auto">
+
+    <!-- ── Video surface ──────────────────────────────────────────────── -->
+    <vlc:VideoView x:Name="VideoView"
+                   Grid.Row="0"
+                   MediaPlayer="{Binding Player}"
+                   HorizontalAlignment="Stretch"
+                   VerticalAlignment="Stretch" />
+
+    <!-- ── Controls overlay (auto-hide) ──────────────────────────────── -->
+    <Border x:Name="ControlsBar"
+            Grid.Row="1"
+            Background="#E0000000"
+            Padding="16,12">
+
+      <StackPanel Spacing="10">
+
+        <!-- Progress bar -->
+        <Grid x:Name="ProgressArea" Margin="0,0,0,4">
+          <Border Height="4"
+                  CornerRadius="2"
+                  Background="#44FFFFFF" />
+          <Border x:Name="ProgressFill"
+                  Height="4"
+                  CornerRadius="2"
+                  Background="{DynamicResource Accent}"
+                  HorizontalAlignment="Left" />
+          <!-- Invisible hit-area for drag -->
+          <Border x:Name="ProgressHit"
+                  Height="20"
+                  Background="Transparent"
+                  Cursor="Hand" />
+        </Grid>
+
+        <!-- Buttons row -->
+        <Grid ColumnDefinitions="*,Auto,*">
+
+          <!-- Left: time -->
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6"
+                      VerticalAlignment="Center">
+            <TextBlock Text="{Binding TimeText}"     Foreground="White" FontSize="13" />
+            <TextBlock Text="/"                      Foreground="#88FFFFFF" FontSize="13" />
+            <TextBlock Text="{Binding DurationText}" Foreground="#88FFFFFF" FontSize="13" />
+          </StackPanel>
+
+          <!-- Center: transport -->
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                      HorizontalAlignment="Center">
+
+            <Button x:Name="BtnRewind"  Classes="ctrl" Content="⏮  -5s"  />
+            <Button x:Name="BtnPlay"    Classes="ctrl" Width="48" Height="48" FontSize="20"
+                    Content="{Binding IsPlaying, Converter={StaticResource PlayPauseIconConv}}" />
+            <Button x:Name="BtnForward" Classes="ctrl" Content="+5s  ⏭" />
+          </StackPanel>
+
+          <!-- Right: volume + speed + close -->
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12"
+                      HorizontalAlignment="Right" VerticalAlignment="Center">
+
+            <TextBlock x:Name="VolText"
+                       Text="{Binding Volume, StringFormat=🔊 {0:P0}}"
+                       Foreground="White" FontSize="12"
+                       VerticalAlignment="Center" />
+
+            <ComboBox x:Name="SpeedBox"
+                      SelectedItem="{Binding PlaybackRate}"
+                      Foreground="White"
+                      Background="#44FFFFFF"
+                      BorderBrush="Transparent"
+                      Width="70" />
+
+            <Button x:Name="BtnClose"
+                    Classes="ctrl"
+                    Content="✕"
+                    FontSize="16"
+                    Foreground="#FF6B6B"
+                    Command="{Binding CloseCommand}" />
+          </StackPanel>
+
+        </Grid>
+      </StackPanel>
+    </Border>
+
+  </Grid>
+</Window>

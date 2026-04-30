@@ -1,0 +1,28 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:MediaVault"
+             x:Class="MediaVault.App"
+             RequestedThemeVariant="Dark">
+
+  <Application.DataTemplates>
+    <local:ViewLocator />
+  </Application.DataTemplates>
+
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <!-- Active theme — swapped at runtime via App.ApplyTheme() -->
+        <ResourceInclude Source="avares://MediaVault/Assets/Themes/DarkPurple.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <!-- Converters -->
+      <local:StringNotEmptyConverter  x:Key="StringNotEmptyConv"  />
+      <local:PlayPauseIconConverter   x:Key="PlayPauseIconConv"   />
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.Styles>
+    <FluentTheme />
+    <StyleInclude Source="avares://MediaVault/Assets/Styles.axaml" />
+  </Application.Styles>
+</Application>

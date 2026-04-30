@@ -1,0 +1,215 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MediaVault.ViewModels"
+        xmlns:ctrl="using:MediaVault.Controls"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        x:Class="MediaVault.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="MediaVault"
+        Width="1440" Height="900"
+        MinWidth="900" MinHeight="600"
+        Background="{DynamicResource AppBg}">
+
+  <DockPanel>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--  HEADER                                                             -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <Border DockPanel.Dock="Top"
+            Background="{DynamicResource HeaderBg}"
+            Padding="16,10"
+            BoxShadow="0 2 8 0 #22000000">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+
+        <!-- Logo -->
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10"
+                    VerticalAlignment="Center">
+          <Border Width="32" Height="32" CornerRadius="8"
+                  Background="{DynamicResource Accent}">
+            <TextBlock Text="▶" Foreground="White" FontSize="16"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="MediaVault"
+                     Foreground="{DynamicResource TextPrimary}"
+                     FontSize="18" FontWeight="Bold"
+                     VerticalAlignment="Center" />
+        </StackPanel>
+
+        <!-- Search bar -->
+        <Border Grid.Column="1"
+                Margin="24,0"
+                CornerRadius="20"
+                Background="{DynamicResource SearchBg}"
+                MaxWidth="480">
+          <Grid ColumnDefinitions="Auto,*,Auto" Margin="12,0">
+            <TextBlock Grid.Column="0" Text="🔍" VerticalAlignment="Center"
+                       Foreground="{DynamicResource TextMuted}" FontSize="14" />
+            <TextBox   Grid.Column="1"
+                       x:Name="SearchBox"
+                       Text="{Binding SearchQuery}"
+                       Watermark="搜索文件名…"
+                       Background="Transparent"
+                       BorderThickness="0"
+                       Foreground="{DynamicResource TextPrimary}"
+                       Padding="8,6" />
+            <Button    Grid.Column="2"
+                       IsVisible="{Binding SearchQuery, Converter={StaticResource StringNotEmptyConv}}"
+                       Content="✕"
+                       Classes="ghost"
+                       Command="{Binding ClearSearchCommand}"
+                    CommandParameter="{x:Null}" />
+          </Grid>
+        </Border>
+
+        <!-- Right controls -->
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+
+          <!-- Import files -->
+          <Button x:Name="BtnImportFiles"
+                  Classes="accent"
+                  Content="+ 导入文件" />
+
+          <!-- Import folder -->
+          <Button x:Name="BtnImportFolder"
+                  Classes="outlined"
+                  Content="📁 导入文件夹" />
+
+          <!-- Theme picker -->
+          <ComboBox x:Name="ThemeBox"
+                    SelectedItem="{Binding CurrentTheme}"
+                    Width="120"
+                    Background="{DynamicResource SearchBg}"
+                    BorderBrush="Transparent"
+                    Foreground="{DynamicResource TextPrimary}">
+            <ComboBoxItem Content="暗紫" Tag="DarkPurple" />
+            <ComboBoxItem Content="浅色" Tag="Light"      />
+            <ComboBoxItem Content="深空" Tag="DeepSpace"  />
+            <ComboBoxItem Content="暖焦糖" Tag="Caramel"  />
+            <ComboBoxItem Content="翠绿" Tag="Emerald"    />
+            <ComboBoxItem Content="玫瑰" Tag="Rose"       />
+          </ComboBox>
+
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--  SUBBAR                                                             -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <Border DockPanel.Dock="Top"
+            Background="{DynamicResource SubbarBg}"
+            Padding="16,6"
+            BorderBrush="{DynamicResource BorderColor}"
+            BorderThickness="0,0,0,1">
+      <Grid ColumnDefinitions="Auto,*,Auto">
+
+        <!-- Type filter chips -->
+        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+          <Button x:Name="BtnFilterAll"    Classes="chip" Content="全部"     />
+          <Button x:Name="BtnFilterVideo"  Classes="chip" Content="视频"     />
+          <Button x:Name="BtnFilterAudio"  Classes="chip" Content="音频"     />
+          <Button x:Name="BtnFilterRecent" Classes="chip" Content="最近添加" />
+        </StackPanel>
+
+        <!-- Folder chips (dynamic) -->
+        <ScrollViewer Grid.Column="1"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Disabled"
+                      Margin="12,0">
+          <ItemsControl x:Name="FolderChips"
+                        ItemsSource="{Binding Folders}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal" Spacing="6" />
+              </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <ToggleButton Content="{Binding Name}"
+                              IsChecked="{Binding Visible}"
+                              Classes="folderChip" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Preview speed -->
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                    VerticalAlignment="Center">
+          <TextBlock Text="预览倍速"
+                     Foreground="{DynamicResource TextMuted}"
+                     FontSize="12"
+                     VerticalAlignment="Center" />
+          <ComboBox x:Name="SpeedBox"
+                    Width="75"
+                    Background="{DynamicResource SearchBg}"
+                    BorderBrush="Transparent"
+                    Foreground="{DynamicResource TextPrimary}" />
+        </StackPanel>
+
+      </Grid>
+    </Border>
+
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <!--  CONTENT AREA                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════════ -->
+    <Grid>
+
+      <!-- Drop zone overlay (shown while dragging) -->
+      <Border x:Name="DropZone"
+              IsVisible="False"
+              Background="#CC000000"
+              ZIndex="100">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
+          <TextBlock Text="📂" FontSize="64" HorizontalAlignment="Center" />
+          <TextBlock Text="松开鼠标以导入媒体文件"
+                     FontSize="20" Foreground="White"
+                     HorizontalAlignment="Center" />
+        </StackPanel>
+      </Border>
+
+      <!-- Empty state -->
+      <StackPanel IsVisible="{Binding IsEmpty}"
+                  HorizontalAlignment="Center"
+                  VerticalAlignment="Center"
+                  Spacing="20">
+        <TextBlock Text="▶" FontSize="80"
+                   Foreground="{DynamicResource Accent}"
+                   HorizontalAlignment="Center" Opacity="0.4" />
+        <TextBlock Text="拖放媒体文件或文件夹到此处"
+                   FontSize="20"
+                   Foreground="{DynamicResource TextMuted}"
+                   HorizontalAlignment="Center" />
+        <TextBlock Text="支持 MP4 / MKV / MOV / AVI / WEBM / MP3 / FLAC 等格式"
+                   FontSize="13"
+                   Foreground="{DynamicResource TextMuted}"
+                   HorizontalAlignment="Center" Opacity="0.6" />
+      </StackPanel>
+
+      <!-- Media grid -->
+      <ScrollViewer x:Name="GridScroll"
+                    IsVisible="{Binding !IsEmpty}"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto"
+                    Padding="12">
+        <Panel>
+          <!-- Loading indicator -->
+          <TextBlock IsVisible="{Binding IsImporting}"
+                     Text="正在解析媒体文件…"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Top"
+                     Margin="0,20"
+                     Foreground="{DynamicResource TextMuted}" />
+
+          <ctrl:MasonryPanel x:Name="MediaGrid"
+                             ColumnWidth="260"
+                             Gap="10" />
+        </Panel>
+      </ScrollViewer>
+
+    </Grid>
+
+  </DockPanel>
+</Window>

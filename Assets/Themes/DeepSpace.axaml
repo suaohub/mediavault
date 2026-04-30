@@ -1,0 +1,15 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Deep Space (dark blue + amber) -->
+  <SolidColorBrush x:Key="AppBg"          Color="#04080F" />
+  <SolidColorBrush x:Key="HeaderBg"       Color="#060C18" />
+  <SolidColorBrush x:Key="SubbarBg"       Color="#050A14" />
+  <SolidColorBrush x:Key="CardBg"         Color="#0A1220" />
+  <SolidColorBrush x:Key="CardSkeletonBg" Color="#111C2E" />
+  <SolidColorBrush x:Key="SearchBg"       Color="#0D1828" />
+  <SolidColorBrush x:Key="BorderColor"    Color="#152238" />
+  <SolidColorBrush x:Key="Accent"         Color="#F59E0B" />
+  <SolidColorBrush x:Key="AccentHover"    Color="#FBBF24" />
+  <SolidColorBrush x:Key="TextPrimary"    Color="#D1E8FF" />
+  <SolidColorBrush x:Key="TextMuted"      Color="#4A6080" />
+</ResourceDictionary>

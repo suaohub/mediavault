@@ -1,0 +1,15 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Rose -->
+  <SolidColorBrush x:Key="AppBg"          Color="#130810" />
+  <SolidColorBrush x:Key="HeaderBg"       Color="#1C0E18" />
+  <SolidColorBrush x:Key="SubbarBg"       Color="#180B14" />
+  <SolidColorBrush x:Key="CardBg"         Color="#22101E" />
+  <SolidColorBrush x:Key="CardSkeletonBg" Color="#2C1628" />
+  <SolidColorBrush x:Key="SearchBg"       Color="#261422" />
+  <SolidColorBrush x:Key="BorderColor"    Color="#3A1C34" />
+  <SolidColorBrush x:Key="Accent"         Color="#F43F5E" />
+  <SolidColorBrush x:Key="AccentHover"    Color="#FB7185" />
+  <SolidColorBrush x:Key="TextPrimary"    Color="#F0D8E8" />
+  <SolidColorBrush x:Key="TextMuted"      Color="#785068" />
+</ResourceDictionary>

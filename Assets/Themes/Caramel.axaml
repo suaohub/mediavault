@@ -1,0 +1,15 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <!-- Warm Caramel -->
+  <SolidColorBrush x:Key="AppBg"          Color="#130E09" />
+  <SolidColorBrush x:Key="HeaderBg"       Color="#1C1510" />
+  <SolidColorBrush x:Key="SubbarBg"       Color="#18120D" />
+  <SolidColorBrush x:Key="CardBg"         Color="#221A12" />
+  <SolidColorBrush x:Key="CardSkeletonBg" Color="#2C2218" />
+  <SolidColorBrush x:Key="SearchBg"       Color="#261E14" />
+  <SolidColorBrush x:Key="BorderColor"    Color="#3A2C1E" />
+  <SolidColorBrush x:Key="Accent"         Color="#F97316" />
+  <SolidColorBrush x:Key="AccentHover"    Color="#FB923C" />
+  <SolidColorBrush x:Key="TextPrimary"    Color="#F0E6D4" />
+  <SolidColorBrush x:Key="TextMuted"      Color="#786050" />
+</ResourceDictionary>

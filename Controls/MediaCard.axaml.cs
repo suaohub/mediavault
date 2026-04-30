@@ -17,13 +17,16 @@ namespace MediaVault.Controls;
 public partial class MediaCard : UserControl
 {
     // ── Preview player resources ──────────────────────────────────────────
-    private MediaPlayer? _player;
-    private byte[]?      _pixBuf;
-    private GCHandle     _pinHandle;
+    private MediaPlayer?     _player;
+    private Media?           _media;      // must outlive the player
+    private byte[]?          _pixBuf;
+    private GCHandle         _pinHandle;
     private WriteableBitmap? _wb;
-    private int          _bufAlloc; // 0 = free, 1 = allocated (Interlocked)
+    private volatile int     _bufAlloc;   // 0=free, 1=allocated
+    private volatile bool    _stopping;   // signal callbacks to bail early
 
-    private const uint PW = 640, PH = 360;
+    // Use a smaller resolution for previews — less memory, faster decode
+    private const uint PW = 320, PH = 180;
 
     public MediaCard() => InitializeComponent();
 
@@ -53,7 +56,7 @@ public partial class MediaCard : UserControl
     private void OnEnter(object? _, PointerEventArgs __)
     {
         if (HoverOverlay is not null) HoverOverlay.IsVisible = true;
-        StartPreview(unmuted: true);
+        StartPreview();
     }
 
     private void OnExit(object? _, PointerEventArgs __)
@@ -69,12 +72,14 @@ public partial class MediaCard : UserControl
     }
 
     // ── Preview playback ──────────────────────────────────────────────────
-    public void StartPreview(bool unmuted = false)
+    public void StartPreview()
     {
         if (DataContext is not MediaCardViewModel { File.MediaType: Models.MediaType.Video } vm)
             return;
         if (_player is not null) return;
-        if (Interlocked.Exchange(ref _bufAlloc, 1) != 0) return;
+        if (Interlocked.CompareExchange(ref _bufAlloc, 1, 0) != 0) return;
+
+        _stopping = false;
 
         try
         {
@@ -86,13 +91,16 @@ public partial class MediaCard : UserControl
                              PixelFormat.Bgra8888,
                              AlphaFormat.Opaque);
 
+            // Create the Media FIRST and store it as a field — never put it in a
+            // 'using' block here, because LibVLC starts decoding asynchronously
+            // and the media must remain alive until the player is fully stopped.
+            _media = new Media(VlcService.Instance, vm.File.FilePath, FromType.FromPath);
+
             _player = VlcService.CreatePlayer();
             _player.SetVideoFormat("BGRA", PW, PH, PW * 4);
             _player.SetVideoCallbacks(LockCb, null, DisplayCb);
-            _player.Mute = !unmuted;
-
-            using var media = new Media(VlcService.Instance, vm.File.FilePath, FromType.FromPath);
-            _player.Media = media;
+            _player.Mute = true;
+            _player.Media = _media;
 
             if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mainVm)
                 _player.SetRate((float)mainVm.PreviewSpeed);
@@ -101,14 +109,7 @@ public partial class MediaCard : UserControl
         }
         catch
         {
-            // Ensure we clean up on startup failure
-            Interlocked.Exchange(ref _bufAlloc, 0);
-            if (_pinHandle.IsAllocated) _pinHandle.Free();
-            _wb?.Dispose();
-            _wb     = null;
-            _pixBuf = null;
-            _player?.Dispose();
-            _player = null;
+            CleanupResources(null);
         }
     }
 
@@ -117,9 +118,30 @@ public partial class MediaCard : UserControl
         var p = Interlocked.Exchange(ref _player, null);
         if (p is null) return;
 
-        // Stop FIRST so no more callbacks fire, then free the pinned buffer.
+        // Signal callbacks to abort BEFORE stopping, so they don't write
+        // into the buffer while we're tearing down.
+        _stopping = true;
+
         try { p.Stop(); }    catch { }
         try { p.Dispose(); } catch { }
+
+        // Now safe to free managed resources.
+        CleanupResources(p);
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                if (PreviewImage is not null) PreviewImage.IsVisible = false;
+            }
+            catch { }
+        });
+    }
+
+    private void CleanupResources(MediaPlayer? _)
+    {
+        _media?.Dispose();
+        _media = null;
 
         if (Interlocked.Exchange(ref _bufAlloc, 0) != 0)
         {
@@ -128,30 +150,25 @@ public partial class MediaCard : UserControl
             _wb     = null;
             _pixBuf = null;
         }
-
-        Dispatcher.UIThread.Post(() =>
-        {
-            if (PreviewImage is not null) PreviewImage.IsVisible = false;
-        });
     }
 
-    // ── LibVLC memory callbacks (called from VLC internal thread) ─────────
-    // CRITICAL: must never throw — any unhandled exception from a native
-    // callback will hard-crash the process.
+    // ── LibVLC memory callbacks (VLC internal thread) ─────────────────────
+    // These MUST NOT throw — any unhandled exception crashes the process.
     private IntPtr LockCb(IntPtr _, IntPtr planes)
     {
         try
         {
-            if (_bufAlloc == 1 && _pinHandle.IsAllocated && planes != IntPtr.Zero)
+            if (!_stopping && _bufAlloc == 1 && _pinHandle.IsAllocated
+                && planes != IntPtr.Zero)
                 Marshal.WriteIntPtr(planes, _pinHandle.AddrOfPinnedObject());
         }
-        catch { /* swallow */ }
+        catch { }
         return IntPtr.Zero;
     }
 
     private void DisplayCb(IntPtr _, IntPtr __)
     {
-        if (_bufAlloc != 1 || _pixBuf is null || _wb is null) return;
+        if (_stopping || _bufAlloc != 1 || _pixBuf is null || _wb is null) return;
         try
         {
             var copy = new byte[_pixBuf.Length];
@@ -161,20 +178,20 @@ public partial class MediaCard : UserControl
             {
                 try
                 {
-                    if (_wb is null || PreviewImage is null) return;
+                    if (_stopping || _wb is null || PreviewImage is null) return;
                     using var fb = _wb.Lock();
                     Marshal.Copy(copy, 0, fb.Address, copy.Length);
                     PreviewImage.Source    = _wb;
                     PreviewImage.IsVisible = true;
                 }
-                catch { /* ignore UI update errors */ }
+                catch { }
             });
         }
-        catch { /* swallow */ }
+        catch { }
     }
 }
 
-// ── Routed event: card clicked → open player ─────────────────────────────────
+// ── Routed event ──────────────────────────────────────────────────────────────
 public class OpenPlayerRoutedEventArgs : Avalonia.Interactivity.RoutedEventArgs
 {
     public static readonly Avalonia.Interactivity.RoutedEvent<OpenPlayerRoutedEventArgs> Event =

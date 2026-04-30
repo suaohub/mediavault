@@ -1,117 +1,129 @@
-# MediaVault
+# MediaVault 🎬
 
-> Windows 原生桌面媒体播放器  
-> **C# 8 · Avalonia UI 11 · LibVLCSharp · CommunityToolkit.Mvvm**
+> 一款运行在浏览器中的本地媒体播放器，无需服务器，所有文件处理均在客户端完成。
 
----
+![技术栈](https://img.shields.io/badge/React-19-61dafb?style=flat-square&logo=react)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript)
+![Vite](https://img.shields.io/badge/Vite-8-646cff?style=flat-square&logo=vite)
+![Zustand](https://img.shields.io/badge/Zustand-5-orange?style=flat-square)
 
-## 功能
+## 功能特性
 
-| 功能 | 实现 |
-|------|------|
-| 拖放 / 文件选择 / 文件夹递归导入 | `IStorageFile` / `DragDrop` API |
-| 瀑布流网格（按分辨率自适应宽高比）| 自定义 `MasonryPanel` （纯 C#）|
-| 悬停触发静音视频预览 | LibVLC 内存回调 → `WriteableBitmap` |
-| 点击打开全屏播放器 | `LibVLCSharp.Avalonia.VideoView`（D3D11 硬解）|
-| 全屏键盘快捷键 | ← / → 跳 5s，↑ / ↓ 调音量，任意其他键关闭 |
-| 进度条拖拽（消除卡顿）| `BeginSeek` / `CommitSeek` 分离视觉与解码 |
-| 异步缩略图队列 | `Channel<T>` + LibVLC 内存帧抓取 |
-| 实时搜索 + 类型筛选 + 文件夹筛选 | LINQ 过滤 + `ObservableProperty` |
-| 6 套主题（持久化）| Avalonia `ResourceDictionary` 热切换 |
-| 预览倍速控制（1×–4×）| `MediaPlayer.SetRate()` |
+### 媒体导入
+- **拖放导入**：直接将文件或文件夹拖入窗口
+- **文件选择**：支持多选视频 / 音频文件
+- **文件夹导入**：递归读取整个文件夹及所有子文件夹
+- **支持格式**：MP4、MOV、MKV、AVI、WEBM、MP3、FLAC、WAV、M4A、AAC 等
 
----
+### 媒体库浏览
+- **瀑布流网格**：CSS Columns 实现，根据视频分辨率自适应卡片比例
+  - 横屏视频 → 宽卡片（16:9 / 4:3 / 21:9）
+  - 竖屏视频 → 高卡片（9:16）
+  - 音频文件 → 方形卡片（1:1）
+- **视口自动播放**：进入视口的视频自动以预览倍速静音播放
+- **悬停解音**：鼠标悬停即开启声音
+- **内存优化**：离开视口立即清除解码缓存（`src=''` + `load()`），内存占用与文件数量无关，仅与当前可见卡片数量成正比
 
-## 开发 & 构建
+### 全屏播放器
+- 视频铺满全屏，控制栏叠加显示，3 秒无操作自动隐藏
+- **拖拽进度条**：拖拽过程只移动视觉进度，松手才执行 seek，消除拖拽卡顿
+- **Buffering 指示器**：seek 解码期间显示旋转圈
+- **键盘快捷键**
 
-### macOS 上开发（交叉编译输出 Windows exe）
+  | 按键 | 功能 |
+  |------|------|
+  | `←` | 后退 5 秒 |
+  | `→` | 前进 5 秒 |
+  | `↑` | 音量 +10% |
+  | `↓` | 音量 -10% |
+  | 其他任意键 | 关闭播放器 |
+
+- 倍速调节（0.5× ~ 4×）
+- 原生全屏支持
+
+### 筛选与搜索
+- **实时搜索**：按文件名即时过滤
+- **类型筛选**：全部 / 视频 / 音频 / 最近添加
+- **文件夹筛选**：子栏 chip 下拉，支持多级文件夹层级，可单独控制每个文件夹的显示/隐藏
+- **预览倍速控制**：1× / 1.5× / 2× / 3× / 4×
+
+### 主题
+内置 6 套主题，主题选择持久化到 localStorage：
+
+| 主题 | 风格 | 强调色 |
+|------|------|--------|
+| 暗紫（默认）| 极深黑底 | 紫蓝 |
+| 浅色 | 白灰底 | 蓝紫 |
+| 深空 | 深海蓝底 | 琥珀 |
+| 暖焦糖 | 深暖棕底 | 橙色 |
+| 翠绿 | 深森林底 | 翠绿 |
+| 玫瑰 | 深玫红底 | 玫红 |
+
+## 快速开始
+
+### 环境要求
+- Node.js 18+
+- 现代浏览器（Chrome 90+ / Safari 15+ / Firefox 90+）
+
+### 安装与运行
 
 ```bash
-# 安装 .NET 8 SDK
-curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0
-export PATH="$HOME/.dotnet:$PATH"
-
-# 克隆并恢复依赖
 git clone https://github.com/suaohub/mediavault.git
 cd mediavault
-dotnet restore
-
-# 在 macOS 上直接运行（使用 libvlc.Mac）
-dotnet run
-
-# 交叉编译 Windows x64 自包含发布包
-dotnet publish -r win-x64 -c Release -o publish/win-x64
+npm install
+npm run dev    # 浏览器访问 http://127.0.0.1:5173
 ```
 
-发布包位于 `publish/win-x64/`，包含 `MediaVault.exe` 及 libvlc 原生库，可直接在 Windows 10/11 x64 上运行，无需安装任何运行时。
+### 构建生产版本
 
-### 主题 / 主要脚本
+```bash
+npm run build
+# 产物在 dist/，可直接部署为静态站点
+```
 
-| 命令 | 说明 |
-|------|------|
-| `dotnet run` | 开发模式（macOS 上运行） |
-| `dotnet build` | 编译检查 |
-| `dotnet publish -r win-x64 -c Release` | 发布 Windows 版本 |
+## 技术实现
 
----
+### 内存管理
+浏览器加载视频时，解码后的 RGBA 帧数据非常庞大（1080p 约 8MB/帧）。本项目通过以下策略将内存占用控制在合理范围：
+
+```
+离开视口 → v.pause() → v.src = '' → v.load()
+```
+
+`v.load()` 配合空 src 会触发浏览器的 media element reset，强制释放所有已解码的帧缓冲区和网络连接，内存即时回收。
+
+### 拖拽 Seek 优化
+传统的 `onClick` 直接设置 `currentTime` 会导致每次点击都触发一次从关键帧开始的解码（约 0.5~1s 延迟）。本项目改为：
+
+- `mousedown` → 开始记录拖拽位置（仅更新视觉进度条）
+- `mousemove` → 实时更新视觉位置，不触发任何解码
+- `mouseup` → 执行一次 `currentTime = finalPos`
+
+拖拽体验完全流畅，解码工作集中在松手后的单次操作。
+
+### 文件夹递归读取
+使用 FileSystem Entry API 递归遍历目录树：
+- 拖放：`DataTransferItem.webkitGetAsEntry()` → 递归 `FileSystemDirectoryReader`
+- 选择文件夹：`<input webkitdirectory>` → 解析 `File.webkitRelativePath`
 
 ## 项目结构
 
 ```
-MediaVault/
-├── Models/
-│   ├── MediaFile.cs          # 媒体文件数据模型 + AspectClass
-│   └── FolderNode.cs         # 文件夹树节点（ObservableObject）
-├── ViewModels/
-│   ├── MainWindowViewModel.cs # 全局状态（导入、筛选、主题、倍速）
-│   ├── MediaCardViewModel.cs  # 卡片状态（缩略图异步加载）
-│   └── PlayerViewModel.cs     # 播放器状态（进度、音量、倍速）
-├── Services/
-│   ├── VlcService.cs          # 全局单例 LibVLC 实例
-│   ├── ThumbnailService.cs    # Channel 队列 + LibVLC 内存帧抓取
-│   └── MediaImportService.cs  # 文件/文件夹探测 + LibVLC 元数据解析
-├── Controls/
-│   ├── MasonryPanel.cs        # 自定义瀑布流 Panel（ArrangeOverride）
-│   ├── MediaCard.axaml        # 卡片 UI（缩略图、预览帧、悬停覆盖）
-│   └── MediaCard.axaml.cs     # 卡片逻辑（LibVLC 内存回调、悬停预览）
-├── Views/
-│   ├── MainWindow.axaml       # 主窗口（Header / Subbar / Grid）
-│   ├── MainWindow.axaml.cs    # 导入、拖放、主题切换、网格重建
-│   ├── PlayerWindow.axaml     # 全屏播放器（VideoView + 控制栏）
-│   └── PlayerWindow.axaml.cs  # 键盘快捷键、进度拖拽、自动隐藏控制栏
-├── Assets/
-│   ├── Styles.axaml           # 全局按钮/控件样式
-│   └── Themes/                # 6 套主题 ResourceDictionary
-│       ├── DarkPurple.axaml   ├── Light.axaml  ├── DeepSpace.axaml
-│       ├── Caramel.axaml      ├── Emerald.axaml └── Rose.axaml
-├── App.axaml / App.axaml.cs   # 应用入口、主题热切换
-└── Program.cs                 # [STAThread] 入口点
+src/
+├── types.ts              # TypeScript 类型定义
+├── store.ts              # Zustand 全局状态
+├── utils.ts              # 文件处理、缩略图、元数据工具函数
+├── style.css             # 全局样式 + 6 套主题变量
+├── App.tsx               # 根组件
+└── components/
+    ├── Header.tsx        # 顶部导航（搜索、导入、主题切换）
+    ├── Subbar.tsx        # 子栏（筛选 chip、文件夹、倍速）
+    ├── MediaGrid.tsx     # 瀑布流网格
+    ├── MediaCard.tsx     # 媒体卡片（视口感知 + 内存管理）
+    ├── PlayerModal.tsx   # 全屏播放器
+    ├── MiniPlayer.tsx    # 底部迷你播放条
+    └── DropZone.tsx      # 拖放区域覆盖层
 ```
-
----
-
-## 视频渲染原理
-
-### 卡片预览（悬停）
-```
-鼠标进入卡片
-  → MediaPlayer.SetVideoFormat("BGRA", 640, 360, stride)
-  → SetVideoCallbacks(LockCb, null, DisplayCb)
-  → MediaPlayer.Play()
-  → DisplayCb: BlockCopy 帧 → Dispatcher.UIThread.Post → Marshal.Copy → WriteableBitmap
-  → Image.Source = WriteableBitmap（实时显示）
-鼠标离开
-  → MediaPlayer.Stop() → GCHandle.Free() → WriteableBitmap.Dispose()
-```
-
-### 全屏播放器
-```
-VideoView（LibVLCSharp.Avalonia）
-  → Windows: LibVLC D3D11 硬解 → 零拷贝 Surface 输出
-  → macOS:   LibVLC VDA/VideoToolbox → OpenGL 输出
-```
-
----
 
 ## License
 

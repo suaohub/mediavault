@@ -1,23 +1,35 @@
 import { useCallback, useState } from 'react'
 import { useStore } from './store'
-import { readDroppedItems, processFilesStreamingV2, readInputFiles } from './utils'
-import DropZone   from './components/DropZone'
-import Header     from './components/Header'
-import Subbar     from './components/Subbar'
-import MediaGrid  from './components/MediaGrid'
-import MiniPlayer    from './components/MiniPlayer'
-import PlayerModal   from './components/PlayerModal'
+import { readDroppedItems, processFiles, captureThumbnail } from './utils'
+import DropZone  from './components/DropZone'
+import Header    from './components/Header'
+import Subbar    from './components/Subbar'
+import MediaGrid from './components/MediaGrid'
+import MiniPlayer   from './components/MiniPlayer'
+import PlayerModal  from './components/PlayerModal'
 import './style.css'
 
-function EmptyState({ onImport }: { onImport: (pairs: { file: File; relativePath: string }[]) => void }) {
+function EmptyState({ onImportStart, onImportEnd }: { onImportStart: () => void; onImportEnd: () => void }) {
+  const { addFiles, updateThumbnail } = useStore()
+
   const triggerFile   = () => document.getElementById('es-file')?.click()
   const triggerFolder = () => document.getElementById('es-folder')?.click()
 
-  const handleInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files) return
-    const pairs = readInputFiles(files)
-    if (pairs.length > 0) onImport(pairs)
+    const pairs = Array.from(files).map(f => ({
+      file: f,
+      relativePath: (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name,
+    }))
+    if (pairs.length === 0) return
+    onImportStart()
+    const { mediaFiles, folders } = await processFiles(pairs)
+    addFiles(mediaFiles, folders)
+    onImportEnd()
+    for (const mf of mediaFiles.filter(f => f.mediaType === 'video')) {
+      captureThumbnail(mf.file).then(t => { if (t) updateThumbnail(mf.id, t) })
+    }
     e.target.value = ''
   }
 
@@ -44,62 +56,37 @@ function EmptyState({ onImport }: { onImport: (pairs: { file: File; relativePath
 }
 
 export default function App() {
-  const mediaFiles       = useStore(s => s.mediaFiles)
+  const mediaFiles = useStore(s => s.mediaFiles)
   const { addFiles, updateThumbnail } = useStore()
+  const [loading, setLoading] = useState(false)
 
-  // 0 = idle, 1–99 = loading, 100 = briefly shown then cleared
-  const [progress, setProgress] = useState(0)
-
-  const handlePairs = useCallback(async (pairs: { file: File; relativePath: string }[]) => {
-    if (pairs.length === 0) return
-
-    const total = pairs.length
-    let done    = 0
-    setProgress(1)
-
-    await processFilesStreamingV2(
-      pairs,
-      (batchFiles, folders) => {
-        addFiles(batchFiles, folders)
-        done += batchFiles.length
-        // Reserve last 5% for thumbnail phase
-        setProgress(Math.min(Math.round((done / total) * 95), 95))
-      },
-      (id, thumbUrl) => {
-        updateThumbnail(id, thumbUrl)
-      }
-    )
-
-    setProgress(100)
-    setTimeout(() => setProgress(0), 400)
-  }, [addFiles, updateThumbnail])
+  const onImportStart = useCallback(() => setLoading(true),  [])
+  const onImportEnd   = useCallback(() => setLoading(false), [])
 
   const handleDrop = useCallback(async (dt: DataTransfer) => {
     const pairs = await readDroppedItems(dt)
-    handlePairs(pairs)
-  }, [handlePairs])
+    if (pairs.length === 0) return
+    setLoading(true)
+    const { mediaFiles: mfs, folders } = await processFiles(pairs)
+    addFiles(mfs, folders)
+    setLoading(false)
+    for (const mf of mfs.filter(f => f.mediaType === 'video')) {
+      captureThumbnail(mf.file).then(t => { if (t) updateThumbnail(mf.id, t) })
+    }
+  }, [addFiles, updateThumbnail])
 
   return (
     <>
-      {/* Accurate progress bar — width driven by real batch completion */}
-      {progress > 0 && (
-        <div
-          className="loading-bar"
-          style={{
-            width: `${progress}%`,
-            transition: progress === 100 ? 'width .1s, opacity .3s .1s' : 'width .2s',
-            opacity: progress === 100 ? 0 : 1,
-          }}
-        />
-      )}
+      {/* Loading progress bar */}
+      {loading && <div className="loading-bar" style={{ width: '66%' }} />}
 
       <DropZone onDrop={handleDrop} />
-      <Header onImport={handlePairs} />
+      <Header onImportStart={onImportStart} onImportEnd={onImportEnd} />
       <Subbar />
 
       <main className="main">
         {mediaFiles.length === 0
-          ? <EmptyState onImport={handlePairs} />
+          ? <EmptyState onImportStart={onImportStart} onImportEnd={onImportEnd} />
           : <MediaGrid />
         }
       </main>

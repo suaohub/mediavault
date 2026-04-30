@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, memo } from 'react'
 import type { MediaFile } from '../types'
 import { formatDuration, formatSize } from '../utils'
-import { VideoPool } from '../videoPool'
 
 interface Props {
   item: MediaFile
@@ -51,23 +50,23 @@ function IcoVol({ muted }: { muted: boolean }) {
 
 const SEEK_SECS: Record<number, number> = { 1: 20, 1.5: 13, 2: 10, 3: 6.5, 4: 5 }
 
-/** Minimum time a card must be in-view before we start loading (ms). */
-const ENTER_DEBOUNCE = 120
-/** Time card must be out-of-view before we begin the unload process (ms). */
-const LEAVE_DEBOUNCE = 300
-/** After LEAVE_DEBOUNCE, wait this long before actually clearing src (ms).
- *  Keeps the video alive for a brief moment in case the user scrolls back. */
-const UNLOAD_DELAY   = 700
+/** How long to stay "active" after leaving the viewport before unloading (ms).
+ *  Prevents rapid load/unload when the user scrolls slowly past a card. */
+const UNLOAD_DELAY = 800
+
+/** How long to wait after an IntersectionObserver change before acting (ms).
+ *  Prevents reacting to momentary scroll bounces. */
+const ENTER_DEBOUNCE  = 120
+const LEAVE_DEBOUNCE  = 300
 
 function MediaCard({ item, previewSpeed, onOpen }: Props) {
   const cardRef  = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
 
+  // Refs hold live values for use inside async callbacks (avoid stale closures)
   const inViewRef      = useRef(false)
   const hoveredRef     = useRef(false)
   const speedRef       = useRef(previewSpeed)
-  const releasePoolRef = useRef<(() => void) | null>(null)
-
   const enterTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const leaveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const unloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -77,23 +76,34 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
   const [srcActive,    setSrcActive]    = useState(false)
   const [videoVisible, setVideoVisible] = useState(false)
 
+  /* ── Keep refs in sync ── */
   useEffect(() => { inViewRef.current  = inView  }, [inView])
   useEffect(() => { hoveredRef.current = hovered }, [hovered])
   useEffect(() => { speedRef.current   = previewSpeed }, [previewSpeed])
 
-  /* ── IntersectionObserver ── */
+  /* ── IntersectionObserver with debounce ── */
   useEffect(() => {
     const io = new IntersectionObserver(
       ([e]) => {
-        if (e.isIntersecting) {
+        const entering = e.isIntersecting
+
+        if (entering) {
+          // Cancel any pending leave / unload timers
           if (leaveTimerRef.current)  { clearTimeout(leaveTimerRef.current);  leaveTimerRef.current  = null }
           if (unloadTimerRef.current) { clearTimeout(unloadTimerRef.current); unloadTimerRef.current = null }
 
-          enterTimerRef.current = setTimeout(() => setInView(true), ENTER_DEBOUNCE)
+          // Short debounce so a quick scroll-through doesn't trigger load
+          enterTimerRef.current = setTimeout(() => {
+            setInView(true)
+          }, ENTER_DEBOUNCE)
         } else {
+          // Cancel pending enter timer (card left before debounce fired)
           if (enterTimerRef.current) { clearTimeout(enterTimerRef.current); enterTimerRef.current = null }
 
-          leaveTimerRef.current = setTimeout(() => setInView(false), LEAVE_DEBOUNCE)
+          // Debounce the leave so small scroll jitter doesn't unload immediately
+          leaveTimerRef.current = setTimeout(() => {
+            setInView(false)
+          }, LEAVE_DEBOUNCE)
         }
       },
       { threshold: 0.1 }
@@ -101,18 +111,10 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
     if (cardRef.current) io.observe(cardRef.current)
     return () => {
       io.disconnect()
-      clearTimeout(enterTimerRef.current  ?? undefined)
-      clearTimeout(leaveTimerRef.current  ?? undefined)
-      clearTimeout(unloadTimerRef.current ?? undefined)
+      if (enterTimerRef.current)  clearTimeout(enterTimerRef.current)
+      if (leaveTimerRef.current)  clearTimeout(leaveTimerRef.current)
+      if (unloadTimerRef.current) clearTimeout(unloadTimerRef.current)
     }
-  }, [])
-
-  /* ── Cleanup on unmount ── */
-  useEffect(() => {
-    return () => {
-      unloadVideo()
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   /* ── Viewport enter / leave ── */
@@ -120,48 +122,30 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
     if (item.mediaType !== 'video') return
 
     if (inView) {
+      // Cancel any pending unload
       if (unloadTimerRef.current) { clearTimeout(unloadTimerRef.current); unloadTimerRef.current = null }
-
-      // Acquire a slot from the global pool; if pool is full, another card is evicted.
-      releasePoolRef.current = VideoPool.acquire(item.id, () => {
-        // Eviction callback — pool forced us out (too many active cards)
-        unloadVideo()
-      })
-
       setSrcActive(true)
     } else {
-      // Give up pool slot immediately so another card can get it
-      releasePoolRef.current?.()
-      releasePoolRef.current = null
-
-      unloadTimerRef.current = setTimeout(unloadVideo, UNLOAD_DELAY)
+      // Delay unloading so upward scroll doesn't cause flicker when user scrolls back
+      unloadTimerRef.current = setTimeout(() => {
+        const v = videoRef.current
+        if (v) {
+          v.pause()
+          v.src = ''
+          v.load()
+        }
+        setSrcActive(false)
+        setVideoVisible(false)
+      }, UNLOAD_DELAY)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inView, item.mediaType])
-
-  function unloadVideo() {
-    const v = videoRef.current
-    if (v) {
-      v.pause()
-      v.src = ''
-      v.load()
-    }
-    setSrcActive(false)
-    setVideoVisible(false)
-  }
-
-  /* ── Touch pool when card is active (keeps it from being LRU-evicted) ── */
-  useEffect(() => {
-    if (!srcActive) return
-    const t = setInterval(() => VideoPool.touch(item.id), 2000)
-    return () => clearInterval(t)
-  }, [srcActive, item.id])
 
   /* ── Start playback once src becomes active ── */
   useEffect(() => {
     const v = videoRef.current
     if (!v || !srcActive) return
 
+    // Hovering → 1× speed; otherwise use global preview speed
     v.muted = !hoveredRef.current
     v.playbackRate = hoveredRef.current ? 1 : speedRef.current
     v.play().catch(() => {})
@@ -175,7 +159,7 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
     return () => v.removeEventListener('canplay', onCanPlay)
   }, [srcActive])
 
-  /* ── Hover: unmute + drop to 1× ── */
+  /* ── Hover enter: unmute + drop to 1× speed ── */
   useEffect(() => {
     const v = videoRef.current
     if (!v || !srcActive) return
@@ -188,13 +172,14 @@ function MediaCard({ item, previewSpeed, onOpen }: Props) {
     }
   }, [hovered, srcActive])
 
-  /* ── Global speed (skip when hovered) ── */
+  /* ── Global speed change (only applies when not hovered) ── */
   useEffect(() => {
     const v = videoRef.current
     if (!v || !srcActive || hovered) return
     v.playbackRate = previewSpeed
   }, [previewSpeed, srcActive, hovered])
 
+  // When hovered, always show 1× in the badge; otherwise show global speed
   const displaySpeed = hovered ? 1 : previewSpeed
   const seekDur      = SEEK_SECS[displaySpeed] ?? 6.5
   const isVideo      = item.mediaType === 'video'

@@ -5,33 +5,6 @@
 :focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 4px; }
 
 /* ═══════════════════════════════════════════
-   GPU 性能优化
-   - 把频繁变化的元素提升到独立合成层（GPU 处理）
-   - 用 contain 限制重排/重绘范围
-   - 减少主线程 layout 触发
-═══════════════════════════════════════════ */
-/* 整体页面开启 GPU 加速文字渲染 */
-body { -webkit-font-smoothing: antialiased; text-rendering: optimizeSpeed; }
-
-/* 视频元素强制独立合成层，解码和渲染全走 GPU */
-video {
-  transform: translateZ(0);
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-}
-
-/* 卡片网格：限制重排范围，滚动时只重绘可见区 */
-.grid {
-  contain: layout style;
-}
-
-/* 每张卡片独立合成层，hover 动画不影响其他卡片 */
-.card {
-  contain: layout style paint;
-  transform: translateZ(0);
-}
-
-/* ═══════════════════════════════════════════
    THEMES
 ═══════════════════════════════════════════ */
 :root, [data-theme="dark"] {
@@ -186,15 +159,12 @@ body {
 #hdr {
   position: fixed; top: 0; left: 0; right: 0; height: 56px;
   background: var(--hdr);
-  backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
   border-bottom: 1px solid var(--bd);
   display: flex; align-items: center; padding: 0 18px; gap: 12px;
   z-index: 500;
   transition: background .3s, border-color .3s;
-  /* 独立合成层，避免模糊计算触发全页重绘 */
-  will-change: backdrop-filter;
-  transform: translateZ(0);
 }
 
 /* Logo */
@@ -266,6 +236,12 @@ body {
   pointer-events: none; border-radius: inherit;
 }
 .btn:active::after { opacity: .06; }
+.btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+}
 
 .btn-ghost {
   background: var(--sf2); border: 1px solid var(--bd);
@@ -288,6 +264,11 @@ body {
   filter: brightness(1.08);
 }
 .btn-pri:active { transform: translateY(0); box-shadow: 0 2px 8px var(--ac-glow); }
+#btn-connect.on {
+  border-color: var(--ac);
+  color: var(--ac2);
+  background: var(--ac-dim);
+}
 
 .icon-btn { padding: 7px 9px; }
 
@@ -343,14 +324,12 @@ body {
 #subbar {
   position: fixed; top: 56px; left: 0; right: 0; height: 42px;
   background: var(--sub);
-  backdrop-filter: blur(16px) saturate(140%);
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
   border-bottom: 1px solid var(--bd);
   display: flex; align-items: center; padding: 0 18px; gap: 10px;
   z-index: 499;
   transition: background .3s, border-color .3s;
-  will-change: backdrop-filter;
-  transform: translateZ(0);
 }
 #stat-txt { font-size: 11.5px; color: var(--tx2); flex-shrink: 0; white-space: nowrap; }
 #stat-txt b { color: var(--tx); font-weight: 600; }
@@ -453,6 +432,13 @@ body {
    GRID
 ═══════════════════════════════════════════ */
 .grid { columns: 5 170px; column-gap: 10px; }
+.load-more-sentinel {
+  width: 100%;
+  text-align: center;
+  color: var(--tx2);
+  font-size: 12px;
+  padding: 14px 0 22px;
+}
 
 /* ═══════════════════════════════════════════
    CARD
@@ -468,6 +454,8 @@ body {
     box-shadow .32s ease,
     border-color .2s;
   will-change: transform;
+  content-visibility: auto;
+  contain-intrinsic-size: 260px;
 }
 .card:hover {
   transform: scale(1.16) translateY(-2px);
@@ -485,6 +473,7 @@ body {
   width: 100%; position: relative; overflow: hidden;
   border-radius: 11px 11px 0 0;
   background: var(--sf2);
+  isolation: isolate;
 }
 .r16x9 { aspect-ratio: 16/9; }
 .r4x3  { aspect-ratio: 4/3; }
@@ -505,6 +494,7 @@ body {
   animation: shimmer 1.6s infinite;
   transform: translateX(-100%);
 }
+.thumb-placeholder.idle::after { animation: none; opacity: 0; }
 @keyframes shimmer { to { transform: translateX(200%); } }
 
 .thumb-img {
@@ -528,13 +518,14 @@ body {
   display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity .2s;
   z-index: 3;
+  pointer-events: none;
 }
 /* 未播放时悬停显示；播放中隐藏遮罩和播放圈 */
 .card:hover:not(.playing) .thumb-ov { opacity: 1; }
 
 .play-ring {
   width: 48px; height: 48px; border-radius: 50%;
-  background: rgba(255,255,255,.15); backdrop-filter: blur(12px);
+  background: rgba(255,255,255,.15);
   border: 1.5px solid rgba(255,255,255,.4);
   display: flex; align-items: center; justify-content: center;
   transform: scale(.8); transition: transform .25s cubic-bezier(.34,1.56,.64,1);
@@ -551,23 +542,47 @@ body {
 
 /* Badges */
 .badge {
-  position: absolute; top: 8px; left: 8px; z-index: 4;
+  position: absolute; top: 8px; left: 8px; z-index: 6;
   font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 5px;
   text-transform: uppercase; letter-spacing: .5px;
-  backdrop-filter: blur(8px);
 }
 .bv { background: rgba(124,111,247,.82); color: #fff; }
 .ba { background: rgba(168,85,247,.82);  color: #fff; }
 
+.fav-btn {
+  position: absolute; top: 10px; right: 10px; z-index: 12;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.24);
+  background: rgba(0,0,0,.5);
+  color: rgba(255,255,255,.9);
+  font-size: 14px; line-height: 1;
+  font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: transform .15s, color .15s, background .15s, border-color .15s, box-shadow .15s;
+  box-shadow: 0 1px 8px rgba(0,0,0,.35);
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+.fav-btn:hover { transform: scale(1.08); color: #fff; }
+.fav-btn.on {
+  color: #ff5a76;
+  border-color: rgba(255,90,118,.8);
+  background: rgba(255,90,118,.18);
+  box-shadow: 0 0 0 1px rgba(255,90,118,.3), 0 4px 16px rgba(255,90,118,.2);
+}
+.card.fav { border-color: rgba(255,90,118,.45); }
+
 .dur-b {
-  position: absolute; bottom: 8px; right: 8px; z-index: 4;
-  background: rgba(0,0,0,.72); backdrop-filter: blur(6px);
+  position: absolute; bottom: 8px; right: 8px; z-index: 6;
+  background: rgba(0,0,0,.72);
   color: #fff; font-size: 10px; font-weight: 600;
   padding: 2px 6px; border-radius: 5px;
 }
 .spd-b {
-  position: absolute; bottom: 8px; left: 8px; z-index: 4;
-  background: rgba(0,0,0,.72); backdrop-filter: blur(6px);
+  position: absolute; bottom: 8px; left: 8px; z-index: 6;
+  background: rgba(0,0,0,.72);
   color: var(--ac2); font-size: 10px; font-weight: 800;
   padding: 2px 6px; border-radius: 5px;
   opacity: 0; transition: opacity .25s;
@@ -598,13 +613,15 @@ body {
   width: 3px; border-radius: 99px;
   background: rgba(168,85,247,.25);
   animation: wv 1.3s ease-in-out infinite;
+  animation-play-state: paused;
   transition: background .25s;
 }
+.card.playing .wbar { animation-play-state: running; }
 .card.playing .wbar { background: rgba(168,85,247,.55); }
 .card:hover  .wbar  { background: #a855f7; }
 @keyframes wv { 0%,100%{transform:scaleY(.15)} 50%{transform:scaleY(1)} }
 .play-dot {
-  position: absolute; top: 8px; right: 8px; z-index: 4;
+  position: absolute; top: 8px; right: 34px; z-index: 6;
   width: 7px; height: 7px; border-radius: 50%; background: var(--ac);
   opacity: 0; transition: opacity .25s;
   box-shadow: 0 0 8px var(--ac);
@@ -640,7 +657,7 @@ body {
   position: absolute; inset: 14px; border-radius: 18px;
   background: var(--ac-dim);
   border: 2px dashed var(--ac);
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(12px);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
   animation: pulse 2s ease infinite;
 }
@@ -842,4 +859,23 @@ body {
 @keyframes cardIn {
   from { opacity: 0; transform: scale(.88) translateY(12px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ═══════════════════════════════════════════
+   性能模式（低特效）
+═══════════════════════════════════════════ */
+body.perf-mode #hdr,
+body.perf-mode #subbar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+body.perf-mode .card {
+  transition: transform .18s ease, border-color .18s ease;
+}
+body.perf-mode .card:hover {
+  transform: scale(1.06) translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0,0,0,.28);
+}
+body.perf-mode .play-ring {
+  box-shadow: none;
 }

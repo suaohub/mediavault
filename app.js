@@ -14,6 +14,18 @@ const THEMES = [
   { id:'rose',    label:'玫瑰',  ac:'#f43f5e', bg:'#0e0408' },
 ]
 const SPEEDS = [1, 1.5, 3, 4]
+const FAVORITES_KEY = 'mv-favorites'
+const HAS_FS_ACCESS = typeof window.showDirectoryPicker === 'function'
+const PERF_MODE_KEY = 'mv-perf-mode'
+const CPU_THREADS = navigator.hardwareConcurrency || 8
+const META_PROGRESS_WEIGHT = 80
+const THUMB_PROGRESS_WEIGHT = 20
+const MEDIA_CACHE_PREFIX = 'media-cache:'
+const MEDIA_CACHE_VERSION = 1
+const VIRTUAL_BATCH_STD = 120
+const VIRTUAL_BATCH_PERF = 80
+const VIRTUAL_FIRST_STD = 180
+const VIRTUAL_FIRST_PERF = 120
 
 /* ── State ── */
 const state = {
@@ -24,6 +36,9 @@ const state = {
   speed:       3,
   theme:       localStorage.getItem('mv-theme') || 'dark',
   playerIdx:   -1,
+  favorites:   new Set(JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]')),
+  perfMode:    localStorage.getItem(PERF_MODE_KEY) || 'standard',
+  previewQueue: [],
 }
 
 /* ── DOM refs ── */
@@ -39,6 +54,18 @@ const spdVal      = $('spd-val')
 const spdPop      = $('spd-pop')
 const themePop    = $('theme-pop')
 const themeGrid   = $('theme-grid')
+const btnConnect  = $('btn-connect')
+const btnPerf     = $('btn-perf')
+const audioPlayObserver = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    e.target.classList.toggle('playing', e.isIntersecting)
+  }
+}, { threshold: 0.1 })
+const loadMoreSentinel = document.createElement('div')
+loadMoreSentinel.className = 'load-more-sentinel'
+loadMoreSentinel.textContent = '继续加载...'
+loadMoreSentinel.hidden = true
+$('main').appendChild(loadMoreSentinel)
 
 /* ═══════════════════════════════════════════════════
    HELPERS
@@ -77,6 +104,177 @@ const uuid = () => crypto.randomUUID()
 function setProgress(p) {
   loadingBar.style.width   = p + '%'
   loadingBar.style.opacity = p >= 100 ? '0' : '1'
+}
+
+function idleYield() {
+  return new Promise(resolve => setTimeout(resolve, 0))
+}
+
+function runWhenIdle(task) {
+  return new Promise((resolve, reject) => {
+    const run = () => Promise.resolve().then(task).then(resolve, reject)
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(() => run(), { timeout: 1200 })
+    } else {
+      setTimeout(run, 0)
+    }
+  })
+}
+
+function fileKey(file, rel) {
+  return `${rel}|${file.size}|${file.lastModified}`
+}
+
+const mediaCacheKey = k => `${MEDIA_CACHE_PREFIX}${k}`
+
+async function getMediaCache(k) {
+  try { return await dbGet(mediaCacheKey(k)) } catch { return null }
+}
+
+async function setMediaCache(k, value) {
+  try { await dbSet(mediaCacheKey(k), value) } catch {}
+}
+
+function getMetaWorkers() {
+  return state.perfMode === 'performance'
+    ? Math.min(4, Math.max(2, Math.floor(CPU_THREADS * 0.45)))
+    : Math.min(6, Math.max(4, Math.floor(CPU_THREADS * 0.6)))
+}
+
+function getThumbWorkers() {
+  return state.perfMode === 'performance'
+    ? Math.min(3, Math.max(1, Math.floor(CPU_THREADS * 0.3)))
+    : Math.min(4, Math.max(2, Math.floor(CPU_THREADS * 0.4)))
+}
+
+function getPreviewPoolLimit() {
+  return state.perfMode === 'performance' ? 1 : 2
+}
+
+function getVirtualFirstCount() {
+  return state.perfMode === 'performance' ? VIRTUAL_FIRST_PERF : VIRTUAL_FIRST_STD
+}
+
+function getVirtualBatchCount() {
+  return state.perfMode === 'performance' ? VIRTUAL_BATCH_PERF : VIRTUAL_BATCH_STD
+}
+
+function applyPerfMode(mode) {
+  state.perfMode = mode === 'performance' ? 'performance' : 'standard'
+  localStorage.setItem(PERF_MODE_KEY, state.perfMode)
+  document.body.classList.toggle('perf-mode', state.perfMode === 'performance')
+  if (btnPerf) btnPerf.textContent = state.perfMode === 'performance' ? '性能：流畅优先' : '性能：标准'
+}
+
+function persistFavorites() {
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify([...state.favorites]))
+}
+
+function clearLibrary() {
+  grid.querySelectorAll('.card[data-type="video"]').forEach(c => stopPreview(c))
+  grid.querySelectorAll('.card[data-type="audio"]').forEach(c => audioPlayObserver.unobserve(c))
+  for (const item of state.items) {
+    if (item.url) URL.revokeObjectURL(item.url)
+    if (item.thumb) URL.revokeObjectURL(item.thumb)
+  }
+  state.items = []
+  state.folders = []
+  state.playerIdx = -1
+  state.previewQueue = []
+  _virtualItems = []
+  _virtualCursor = 0
+  grid.innerHTML = ''
+  renderFolderChips()
+  updateStat()
+  showGrid()
+}
+
+/* ═══════════════════════════════════════════════════
+   FILE SYSTEM ACCESS PERSIST (IndexedDB)
+   ═══════════════════════════════════════════════════ */
+const DB_NAME = 'mediavault-db'
+const DB_VER = 1
+const KV_STORE = 'kv'
+const LIB_HANDLE_KEY = 'library-handle'
+
+function openDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER)
+    req.onupgradeneeded = () => {
+      const db = req.result
+      if (!db.objectStoreNames.contains(KV_STORE)) db.createObjectStore(KV_STORE)
+    }
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function dbGet(key) {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KV_STORE, 'readonly')
+    const store = tx.objectStore(KV_STORE)
+    const req = store.get(key)
+    req.onsuccess = () => resolve(req.result)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function dbSet(key, val) {
+  const db = await openDb()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(KV_STORE, 'readwrite')
+    const store = tx.objectStore(KV_STORE)
+    const req = store.put(val, key)
+    req.onsuccess = () => resolve()
+    req.onerror = () => reject(req.error)
+  })
+}
+
+async function collectPairsFromHandle(dirHandle, base = '') {
+  const pairs = []
+  for await (const [name, entry] of dirHandle.entries()) {
+    if (entry.kind === 'directory') {
+      const nested = await collectPairsFromHandle(entry, `${base}${name}/`)
+      pairs.push(...nested)
+      continue
+    }
+    if (!isMed(name)) continue
+    const file = await entry.getFile()
+    pairs.push({ file, rel: `${base}${name}` })
+  }
+  return pairs
+}
+
+async function loadFromDirectoryHandle(dirHandle, replace = false) {
+  if (replace) clearLibrary()
+  const pairs = await collectPairsFromHandle(dirHandle)
+  await importPairs(pairs)
+}
+
+async function connectLibraryFolder() {
+  if (!HAS_FS_ACCESS) return
+  try {
+    const handle = await window.showDirectoryPicker({ mode: 'read' })
+    await dbSet(LIB_HANDLE_KEY, handle)
+    btnConnect.textContent = '目录已连接'
+    btnConnect.classList.add('on')
+    await loadFromDirectoryHandle(handle, true)
+  } catch {}
+}
+
+async function tryRestoreLibraryFolder() {
+  if (!HAS_FS_ACCESS) return
+  try {
+    const handle = await dbGet(LIB_HANDLE_KEY)
+    if (!handle) return
+    let perm = await handle.queryPermission({ mode: 'read' })
+    if (perm !== 'granted') perm = await handle.requestPermission({ mode: 'read' })
+    if (perm !== 'granted') return
+    btnConnect.textContent = '目录已连接'
+    btnConnect.classList.add('on')
+    await loadFromDirectoryHandle(handle, true)
+  } catch {}
 }
 
 /* ═══════════════════════════════════════════════════
@@ -148,7 +346,10 @@ function captureThumbnail(file) {
         const c = document.createElement('canvas')
         c.width = W; c.height = H
         c.getContext('2d').drawImage(vid, 0, 0, W, H)
-        c.toBlob(blob => finish(blob ? URL.createObjectURL(blob) : null), 'image/jpeg', 0.72)
+        c.toBlob(blob => {
+          if (!blob) return finish(null)
+          finish({ blob, url: URL.createObjectURL(blob) })
+        }, 'image/jpeg', 0.72)
       } catch { finish(null) }
     }
     vid.onerror = () => finish(null)
@@ -204,33 +405,44 @@ async function readEntry(entry, base) {
 }
 
 /* ═══════════════════════════════════════════════════
-   IMPORT — concurrency-limited, streaming to grid
+   IMPORT — adaptive concurrency, streaming to grid
    ═══════════════════════════════════════════════════ */
 async function importPairs(pairs) {
   if (!pairs.length) return
   const total = pairs.length
   let done = 0
+  const newVideoItems = []
   setProgress(1)
 
   const { folders, fileFolder } = buildFolders(pairs)
   for (const f of folders) {
     if (!state.folders.find(x => x.id === f.id)) state.folders.push(f)
   }
+  renderFolderChips()
 
-  // Phase 1: probe metadata (4 concurrent) → add cards immediately
+  // Phase 1: probe metadata (adaptive concurrent)
   const queue = [...pairs]
-  const workers = Array.from({ length: 4 }, async () => {
+  const workers = Array.from({ length: getMetaWorkers() }, async () => {
     while (queue.length) {
       const { file, rel } = queue.shift()
       const id     = uuid()
       const url    = URL.createObjectURL(file)
       const type   = isVid(file.name) ? 'video' : 'audio'
       const folder = fileFolder.get(file) ?? '__root__'
+      const k      = fileKey(file, rel)
+      const cached = await getMediaCache(k)
 
       let w = null, h = null, dur = null
       let asp = type === 'audio' ? 'r1x1' : 'r16x9'
+      let thumb = null
 
-      if (type === 'video') {
+      if (cached && cached.v === MEDIA_CACHE_VERSION) {
+        w = cached.w ?? null
+        h = cached.h ?? null
+        dur = cached.dur ?? null
+        asp = cached.asp ?? asp
+        if (cached.thumbBlob) thumb = URL.createObjectURL(cached.thumbBlob)
+      } else if (type === 'video') {
         const m = await probeVideo(file)
         if (m) { w = m.w; h = m.h; dur = m.dur; asp = aspect(w, h) }
       } else {
@@ -239,43 +451,75 @@ async function importPairs(pairs) {
 
       const item = {
         id, name: file.name, type, file, url,
-        thumb: null, dur, w, h, asp,
+        thumb, dur, w, h, asp,
         size: file.size, folder, addedAt: Date.now(),
+        k, rel,
+        favorite: false,
       }
+      item.favorite = state.favorites.has(item.k)
       state.items.push(item)
-      appendCard(item)
+      if (type === 'video') newVideoItems.push(item)
+      if (!cached) {
+        setMediaCache(k, {
+          v: MEDIA_CACHE_VERSION,
+          w, h, dur, asp,
+          thumbBlob: null,
+        })
+      }
 
       done++
-      setProgress(Math.round(done / total * 90))
-      updateStat()
-      renderFolderChips()
+      setProgress(Math.round(done / total * META_PROGRESS_WEIGHT))
+      if (done % 8 === 0 || done === total) updateStat()
+      if (done % 12 === 0) await idleYield()
     }
   })
   await Promise.all(workers)
+  rebuildGrid()
 
-  // Phase 2: thumbnails (2 concurrent)
-  const vidItems   = state.items.filter(x => x.type === 'video' && !x.thumb)
+  // Phase 2: thumbnails (adaptive concurrent), only for current import batch
+  const vidItems   = newVideoItems.filter(x => !x.thumb)
+  if (!vidItems.length) {
+    setProgress(100)
+    setTimeout(() => setProgress(0), 500)
+    return
+  }
   const thumbQ     = [...vidItems]
   const thumbDone  = { n: 0 }
-  const thumbWork  = Array.from({ length: 2 }, async () => {
+  const thumbWork  = Array.from({ length: getThumbWorkers() }, async () => {
     while (thumbQ.length) {
       const item = thumbQ.shift()
-      const t    = await captureThumbnail(item.file)
+      const t    = await runWhenIdle(() => captureThumbnail(item.file))
       if (t) {
-        item.thumb = t
+        item.thumb = t.url
+        await setMediaCache(item.k, {
+          v: MEDIA_CACHE_VERSION,
+          w: item.w, h: item.h, dur: item.dur, asp: item.asp,
+          thumbBlob: t.blob,
+        })
         const img  = document.querySelector(`[data-id="${item.id}"] .thumb-img`)
         if (img) {
-          img.src    = t
+          img.src    = t.url
           img.hidden = false
           const ph   = img.closest('.thumb')?.querySelector('.thumb-placeholder')
-          if (ph) ph.style.opacity = '0'
+          if (ph) ph.remove()
         }
       }
       thumbDone.n++
-      setProgress(90 + Math.round(thumbDone.n / Math.max(vidItems.length, 1) * 10))
+      setProgress(
+        META_PROGRESS_WEIGHT +
+        Math.round(thumbDone.n / vidItems.length * THUMB_PROGRESS_WEIGHT)
+      )
+      if (thumbDone.n % 8 === 0) await idleYield()
     }
   })
   await Promise.all(thumbWork)
+
+  // 缩略图失败的卡片改为静态占位，避免 shimmer 持续动画拖慢滚动
+  for (const item of vidItems) {
+    if (item.thumb) continue
+    const ph = document.querySelector(`[data-id="${item.id}"] .thumb-placeholder`)
+    if (ph) ph.classList.add('idle')
+  }
 
   setProgress(100)
   setTimeout(() => setProgress(0), 500)
@@ -286,6 +530,7 @@ async function importPairs(pairs) {
    ═══════════════════════════════════════════════════ */
 function startPreview(card, item) {
   if (card._vid) return
+  acquirePreviewSlot(card)
 
   const vid        = document.createElement('video')
   vid.className    = 'thumb-video'
@@ -294,11 +539,9 @@ function startPreview(card, item) {
   vid.playsInline  = true
   vid.preload      = 'auto'
   vid.playbackRate = state.speed
-  // 提示浏览器使用硬件解码器（GPU 解码）
-  vid.setAttribute('x-webkit-airplay', 'deny')
-  vid.disablePictureInPicture = true
-  card._vid = vid
+  card._vid        = vid
 
+  // 等首帧就绪后淡入并播放，避免 play() 在未加载时被浏览器拒绝
   vid.addEventListener('canplay', () => {
     vid.playbackRate = state.speed
     vid.play().catch(() => {})
@@ -308,6 +551,7 @@ function startPreview(card, item) {
     const spd = card.querySelector('.spd-b')
     if (spd) { spd.textContent = state.speed + '×'; spd.style.opacity = '1' }
 
+    // 进度条：直接用 JS 驱动宽度，避免 CSS animation 反复 restart
     startProgBar(card, vid)
   }, { once: true })
 
@@ -317,6 +561,7 @@ function startPreview(card, item) {
 
 function stopPreview(card) {
   const vid = card._vid
+  releasePreviewSlot(card)
   if (!vid) return
   card.classList.remove('playing')
   cancelAnimationFrame(card._raf)
@@ -334,19 +579,30 @@ function stopPreview(card) {
   if (fill) fill.style.width = '0'
 }
 
+function acquirePreviewSlot(card) {
+  const q = state.previewQueue
+  const idx = q.indexOf(card)
+  if (idx >= 0) q.splice(idx, 1)
+  q.push(card)
+  while (q.length > getPreviewPoolLimit()) {
+    const victim = q.shift()
+    if (victim && victim !== card) stopPreview(victim)
+  }
+}
+
+function releasePreviewSlot(card) {
+  const idx = state.previewQueue.indexOf(card)
+  if (idx >= 0) state.previewQueue.splice(idx, 1)
+}
+
 function startProgBar(card, vid) {
   cancelAnimationFrame(card._raf)
-  let lastT = 0
 
-  function tick(now) {
+  function tick() {
     if (!card._vid || vid !== card._vid) return
-    // 约 8fps 更新进度条，减少主线程占用
-    if (now - lastT > 120) {
-      lastT = now
-      const fill = card.querySelector('.prog-fill')
-      if (fill && vid.duration) {
-        fill.style.width = (vid.currentTime / vid.duration * 100) + '%'
-      }
+    const fill = card.querySelector('.prog-fill')
+    if (fill && vid.duration) {
+      fill.style.width = (vid.currentTime / vid.duration * 100) + '%'
     }
     card._raf = requestAnimationFrame(tick)
   }
@@ -354,6 +610,55 @@ function startProgBar(card, vid) {
 }
 
 let _cardIdx = 0
+let _virtualItems = []
+let _virtualCursor = 0
+
+const virtualObserver = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue
+    renderNextBatch()
+  }
+}, { rootMargin: '1200px 0px' })
+virtualObserver.observe(loadMoreSentinel)
+
+function renderNextBatch() {
+  if (_virtualCursor >= _virtualItems.length) {
+    updateLoadMoreSentinel()
+    return
+  }
+  const next = Math.min(_virtualCursor + getVirtualBatchCount(), _virtualItems.length)
+  const frag = document.createDocumentFragment()
+  for (let i = _virtualCursor; i < next; i++) {
+    frag.appendChild(makeCard(_virtualItems[i]))
+  }
+  grid.appendChild(frag)
+  _virtualCursor = next
+  updateLoadMoreSentinel()
+}
+
+function updateLoadMoreSentinel() {
+  const hide = grid.hidden || _virtualCursor >= _virtualItems.length
+  loadMoreSentinel.hidden = hide
+  if (hide) return
+  loadMoreSentinel.textContent = `继续加载 ${_virtualCursor}/${_virtualItems.length}`
+}
+
+function resetVirtualRender(items) {
+  _virtualItems = items
+  _virtualCursor = 0
+  _cardIdx = 0
+  grid.innerHTML = ''
+  const first = Math.min(getVirtualFirstCount(), _virtualItems.length)
+  if (first > 0) {
+    const frag = document.createDocumentFragment()
+    for (let i = 0; i < first; i++) {
+      frag.appendChild(makeCard(_virtualItems[i]))
+    }
+    grid.appendChild(frag)
+    _virtualCursor = first
+  }
+  updateLoadMoreSentinel()
+}
 
 function makeCard(item) {
   const card         = document.createElement('div')
@@ -362,6 +667,7 @@ function makeCard(item) {
   card.dataset.folder= item.folder
   card.dataset.type  = item.type
   card._vid          = null
+  card.classList.toggle('fav', !!item.favorite)
 
   // Staggered entrance — reset after 500ms so re-renders don't accumulate delay
   const delay = Math.min(_cardIdx % 30, 20) * 30
@@ -372,13 +678,15 @@ function makeCard(item) {
     const hasDur   = !!item.dur
     const hasDims  = !!item.w
     const thumbSrc = item.thumb ? ` src="${item.thumb}"` : ''
+    const placeholder = item.thumb ? '' : '<div class="thumb-placeholder"></div>'
 
     card.innerHTML = `
       <div class="thumb ${item.asp}">
-        <div class="thumb-placeholder"></div>
+        ${placeholder}
         <img class="thumb-img"${thumbSrc}${!item.thumb ? ' hidden' : ''} alt="" decoding="async" />
         <div class="thumb-ov"><div class="play-ring"></div></div>
         <span class="badge bv">视频</span>
+        <button class="fav-btn${item.favorite ? ' on' : ''}" title="收藏">${item.favorite ? '❤' : '♡'}</button>
         ${hasDur ? `<span class="dur-b">${fmtDur(item.dur)}</span>` : ''}
         <span class="spd-b">${state.speed}×</span>
         <div class="prog-bar"><div class="prog-fill"></div></div>
@@ -394,6 +702,13 @@ function makeCard(item) {
 
     card.addEventListener('mouseenter', () => startPreview(card, item))
     card.addEventListener('mouseleave', () => stopPreview(card))
+    const favBtn = card.querySelector('.fav-btn')
+    if (favBtn) {
+      favBtn.addEventListener('click', e => {
+        e.stopPropagation()
+        toggleFavorite(item, card, favBtn)
+      })
+    }
 
   } else {
     // Audio card
@@ -406,6 +721,7 @@ function makeCard(item) {
         </div>
         <div class="play-dot"></div>
         <span class="badge ba">音频</span>
+        <button class="fav-btn${item.favorite ? ' on' : ''}" title="收藏">${item.favorite ? '❤' : '♡'}</button>
         ${item.dur ? `<span class="dur-b">${fmtDur(item.dur)}</span>` : ''}
       </div>
       <div class="info">
@@ -416,12 +732,15 @@ function makeCard(item) {
         </div>
       </div>`
 
-    // Wave animation when in viewport
-    const ao = new IntersectionObserver(
-      ([e]) => card.classList.toggle('playing', e.isIntersecting),
-      { threshold: 0.1 }
-    )
-    ao.observe(card)
+    // Audio wave animation driven by shared observer (lower scroll overhead)
+    audioPlayObserver.observe(card)
+    const favBtn = card.querySelector('.fav-btn')
+    if (favBtn) {
+      favBtn.addEventListener('click', e => {
+        e.stopPropagation()
+        toggleFavorite(item, card, favBtn)
+      })
+    }
   }
 
   card.addEventListener('click', () => openPlayer(item, card))
@@ -432,11 +751,35 @@ function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
 }
 
-function appendCard(item) {
-  if (!isItemVisible(item)) return
-  const card = makeCard(item)
-  grid.appendChild(card)
-  showGrid()
+function toggleFavorite(item, card, btn) {
+  item.favorite = !item.favorite
+  if (item.favorite) state.favorites.add(item.k)
+  else state.favorites.delete(item.k)
+  persistFavorites()
+
+  if (btn) {
+    btn.classList.toggle('on', item.favorite)
+    btn.textContent = item.favorite ? '❤' : '♡'
+  }
+  if (card) card.classList.toggle('fav', item.favorite)
+
+  if (state.typeFilter === 'favorite' && !item.favorite) {
+    rebuildGrid()
+    return
+  }
+
+  if (!card || !btn) {
+    const host = grid.querySelector(`.card[data-id="${item.id}"]`)
+    if (host) {
+      host.classList.toggle('fav', item.favorite)
+      const hostBtn = host.querySelector('.fav-btn')
+      if (hostBtn) {
+        hostBtn.classList.toggle('on', item.favorite)
+        hostBtn.textContent = item.favorite ? '❤' : '♡'
+      }
+    }
+  }
+  updateStat()
 }
 
 /* ═══════════════════════════════════════════════════
@@ -448,6 +791,7 @@ function isItemVisible(item) {
   if (state.typeFilter === 'video'  && item.type !== 'video')  return false
   if (state.typeFilter === 'audio'  && item.type !== 'audio')  return false
   if (state.typeFilter === 'recent' && Date.now() - item.addedAt > 86400000) return false
+  if (state.typeFilter === 'favorite' && !item.favorite) return false
   const folder = state.folders.find(f => f.id === item.folder)
   if (folder && !folder.visible) return false
   return true
@@ -455,13 +799,11 @@ function isItemVisible(item) {
 
 function rebuildGrid() {
   grid.querySelectorAll('.card[data-type="video"]').forEach(c => stopPreview(c))
-  grid.innerHTML = ''
-  _cardIdx = 0
+  grid.querySelectorAll('.card[data-type="audio"]').forEach(c => audioPlayObserver.unobserve(c))
+  state.previewQueue = []
 
   const visible = state.items.filter(isItemVisible)
-  const frag    = document.createDocumentFragment()
-  for (const item of visible) frag.appendChild(makeCard(item))
-  grid.appendChild(frag)
+  resetVirtualRender(visible)
 
   showGrid()
   updateStat()
@@ -471,14 +813,16 @@ function showGrid() {
   const hasItems    = state.items.length > 0
   emptyState.hidden = hasItems
   grid.hidden       = !hasItems
+  updateLoadMoreSentinel()
 }
 
 function updateStat() {
   const vis  = state.items.filter(isItemVisible)
   const vids = vis.filter(x => x.type === 'video').length
   const auds = vis.filter(x => x.type === 'audio').length
+  const favs = vis.filter(x => x.favorite).length
   statTxt.innerHTML =
-    `<b>${vis.length}</b> 个文件 &nbsp;·&nbsp; <b>${vids}</b> 视频 &nbsp;·&nbsp; <b>${auds}</b> 音频`
+    `<b>${vis.length}</b> 个文件 &nbsp;·&nbsp; <b>${vids}</b> 视频 &nbsp;·&nbsp; <b>${auds}</b> 音频 &nbsp;·&nbsp; <b>${favs}</b> 收藏`
 }
 
 function renderFolderChips() {
@@ -573,7 +917,7 @@ function closePlayer() {
 }
 
 function loadPlayerItem(item) {
-  pmTitle.textContent = item.name
+  pmTitle.textContent = `${item.favorite ? '❤ ' : ''}${item.name}`
   pmSpinner.hidden    = false
   updatePlayerIdx()
   showOverlay()
@@ -614,13 +958,8 @@ function updatePlayerIdx() {
 }
 
 // Time / progress
-let _lastTimeUpdate = 0
 playerVid.addEventListener('timeupdate', () => {
   if (dragActive || !playerVid.duration) return
-  const now = performance.now()
-  // 约 5fps 更新播放器进度条，timeupdate 本身 4-5 次/秒无需每次都 DOM 操作
-  if (now - _lastTimeUpdate < 200) return
-  _lastTimeUpdate = now
   const pct = playerVid.currentTime / playerVid.duration * 100
   pmProg.style.width  = pct + '%'
   pmThumb.style.left  = pct + '%'
@@ -710,6 +1049,13 @@ playerEl.addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (playerEl.hidden) return
   if      (e.key === 'Escape')      closePlayer()
+  else if (e.key === 'Enter' || e.key === 'f' || e.key === 'F') {
+    const cur = state.items[state.playerIdx]
+    if (cur) {
+      toggleFavorite(cur)
+      pmTitle.textContent = `${cur.favorite ? '❤ ' : ''}${cur.name}`
+    }
+  }
   else if (e.key === ' ')           { e.preventDefault(); playerVid.paused ? playerVid.play() : playerVid.pause() }
   else if (e.key === 'ArrowRight')  playerVid.currentTime = Math.min(playerVid.duration, playerVid.currentTime + 5)
   else if (e.key === 'ArrowLeft')   playerVid.currentTime = Math.max(0, playerVid.currentTime - 5)
@@ -844,26 +1190,21 @@ $('input-folder').addEventListener('change', function() {
   this.value = ''
 })
 
-/* ═══════════════════════════════════════════════════
-   GPU 性能优化：滚动时暂停所有卡片 rAF，减少主线程占用
-   ═══════════════════════════════════════════════════ */
-let _scrollTimer = null
-let _scrolling   = false
-
-window.addEventListener('scroll', () => {
-  if (!_scrolling) {
-    _scrolling = true
-    // 滚动开始：暂停所有卡片进度条 rAF
-    grid.querySelectorAll('.card[data-type="video"]').forEach(c => {
-      if (c._raf) { cancelAnimationFrame(c._raf); c._raf = null; c._rafPaused = true }
-    })
+if (btnConnect) {
+  if (!HAS_FS_ACCESS) {
+    btnConnect.disabled = true
+    btnConnect.title = '当前浏览器不支持目录持久化授权'
+  } else {
+    btnConnect.addEventListener('click', connectLibraryFolder)
+    tryRestoreLibraryFolder()
   }
-  clearTimeout(_scrollTimer)
-  _scrollTimer = setTimeout(() => {
-    _scrolling = false
-    // 滚动结束：恢复正在预览的卡片 rAF
-    grid.querySelectorAll('.card[data-type="video"]').forEach(c => {
-      if (c._rafPaused && c._vid) { c._rafPaused = false; startProgBar(c, c._vid) }
-    })
-  }, 150)
-}, { passive: true })
+}
+
+if (btnPerf) {
+  btnPerf.addEventListener('click', () => {
+    const next = state.perfMode === 'performance' ? 'standard' : 'performance'
+    applyPerfMode(next)
+    rebuildGrid()
+  })
+}
+applyPerfMode(state.perfMode)

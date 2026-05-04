@@ -1,0 +1,13 @@
+## .NET / C# / Avalonia
+bin/
+obj/
+*.user
+.vs/
+.idea/
+.vite/
+
+## macOS
+.DS_Store
+
+## Publish output
+publish/

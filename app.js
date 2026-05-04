@@ -77,6 +77,9 @@ const themeGrid   = $('theme-grid')
 const btnConnect  = $('btn-connect')
 const btnPerf     = $('btn-perf')
 const btnShuffle  = $('btn-shuffle')
+const btnHelp     = $('btn-help')
+const helpModal   = $('help-modal')
+const helpClose   = $('help-close')
 const audioPlayObserver = new IntersectionObserver(entries => {
   for (const e of entries) {
     e.target.classList.toggle('playing', e.isIntersecting)
@@ -798,6 +801,9 @@ function makeCard(item) {
     }
   }
 
+  card.addEventListener('mouseenter', () => markGridMouseCard(card))
+  card.addEventListener('mousemove', () => markGridMouseCard(card))
+  card.addEventListener('mouseleave', () => unmarkGridMouseCard(card))
   card.addEventListener('click', () => openPlayer(item, card))
   return card
 }
@@ -903,6 +909,7 @@ function rebuildGrid() {
 
 function shuffleItems() {
   applySort('shuffle')
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 function showGrid() {
@@ -1226,6 +1233,8 @@ const GRID_ARROW_KEYS = new Set(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight']
 const gridNavPressed = new Set()
 const gridNavPending = new Set()
 let gridNavTimer = null
+let gridMouseCard = null
+let gridMouseCardReady = false
 
 function isTextInputTarget(el) {
   return el && (el.isContentEditable || ['INPUT','TEXTAREA','SELECT'].includes(el.tagName))
@@ -1247,12 +1256,40 @@ function selectGridCard(card) {
   card.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
 }
 
+function markGridMouseCard(card) {
+  gridMouseCard = card
+  gridMouseCardReady = true
+}
+
+function unmarkGridMouseCard(card) {
+  if (gridMouseCard === card) gridMouseCard = null
+}
+
+function getGridMouseStartCard(cards) {
+  if (!gridMouseCardReady) return null
+  const card = gridMouseCard && grid.contains(gridMouseCard)
+    ? gridMouseCard
+    : grid.querySelector('.card:hover')
+  if (card && cards.includes(card)) return card
+  return null
+}
+
 function navigateGridByVector(x, y) {
   if (!x && !y) return
   const cards = Array.from(grid.querySelectorAll('.card'))
   if (!cards.length) return
 
-  const cur = grid.querySelector('.card.kb-selected')
+  let cur = grid.querySelector('.card.kb-selected')
+  const mouseStart = getGridMouseStartCard(cards)
+  if (mouseStart) {
+    gridMouseCardReady = false
+    if (mouseStart !== cur) {
+      if (cur) cur.classList.remove('kb-selected')
+      mouseStart.classList.add('kb-selected')
+      cur = mouseStart
+    }
+  }
+
   if (!cur || !cards.includes(cur)) {
     selectGridCard(cards[0])
     return
@@ -1522,4 +1559,18 @@ if (btnPerf) {
 if (btnShuffle) {
   btnShuffle.addEventListener('click', shuffleItems)
 }
+if (btnHelp && helpModal) {
+  btnHelp.addEventListener('click', () => { helpModal.hidden = false })
+}
+if (helpClose && helpModal) {
+  helpClose.addEventListener('click', () => { helpModal.hidden = true })
+}
+helpModal?.addEventListener('click', e => {
+  if (e.target === helpModal) helpModal.hidden = true
+})
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && helpModal && !helpModal.hidden) {
+    helpModal.hidden = true
+  }
+})
 applyPerfMode(state.perfMode)

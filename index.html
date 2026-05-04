@@ -54,6 +54,10 @@
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
       随机
     </button>
+    <button class="btn btn-ghost" id="btn-help" title="使用说明">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      帮助
+    </button>
     <label class="btn btn-pri" for="input-files">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       导入
@@ -168,6 +172,61 @@
     </div>
     <h2>松开即可导入</h2>
     <p>支持视频与音频文件</p>
+  </div>
+</div>
+
+<!-- ── Help Modal ─────────────────────────────────────────────── -->
+<div id="help-modal" class="help-modal" hidden>
+  <div class="help-content">
+    <button class="help-close" id="help-close">&times;</button>
+    <h2>MediaVault 使用说明</h2>
+    <div class="help-section">
+      <h3>基础操作</h3>
+      <ul>
+        <li><b>导入文件</b> - 点击右上角"导入"按钮或拖拽文件到窗口</li>
+        <li><b>导入文件夹</b> - 点击"文件夹"按钮选择整个文件夹</li>
+        <li><b>连接目录</b> - 连接后可自动恢复上次导入的目录</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>浏览与筛选</h3>
+      <ul>
+        <li><b>类型筛选</b> - 使用子栏的"全部/视频/音频/最近/收藏"筛选</li>
+        <li><b>文件夹筛选</b> - 点击文件夹标签显示/隐藏对应内容</li>
+        <li><b>搜索</b> - 在搜索框输入关键词快速查找</li>
+        <li><b>排序</b> - 支持按导入时间、名称、大小、时长排序，或随机打乱</li>
+        <li><b>网格大小</b> - 拖动滑块调整卡片大小，改变视口显示数量</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>键盘快捷键</h3>
+      <ul>
+        <li><b>方向键</b> - 在视频列表中移动选中（支持对角线移动）</li>
+        <li><b>Enter</b> - 打开选中的视频/音频</li>
+        <li><b>ESC</b> - 关闭全屏播放器或弹窗</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>全屏播放器</h3>
+      <ul>
+        <li><b>空格</b> - 播放/暂停</li>
+        <li><b>左右方向键</b> - 快进/快退 5 秒</li>
+        <li><b>上下方向键</b> - 调节音量</li>
+        <li><b>N / P</b> - 下一个/上一个视频</li>
+        <li><b>F</b> - 收藏/取消收藏当前视频</li>
+        <li><b>M</b> - 静音切换</li>
+      </ul>
+    </div>
+    <div class="help-section">
+      <h3>特色功能</h3>
+      <ul>
+        <li><b>播放进度记忆</b> - 自动保存播放位置，下次打开自动恢复</li>
+        <li><b>缩略图预览</b> - 鼠标悬停视频卡片自动播放预览</li>
+        <li><b>倍速播放</b> - 支持 1x/1.5x/3x/4x 倍速切换</li>
+        <li><b>主题切换</b> - 6 种主题配色可选</li>
+        <li><b>性能模式</b> - 标准/性能模式适配不同设备</li>
+      </ul>
+    </div>
   </div>
 </div>
 

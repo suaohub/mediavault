@@ -869,6 +869,15 @@ function sortItems(mode = state.sort) {
   else state.items.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0) || compareByName(a, b))
 }
 
+function shuffledCopy(items) {
+  const arr = [...items]
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+  }
+  return arr
+}
+
 function updateSortUI() {
   const opt = SORT_OPTIONS.find(x => x.id === state.sort) || SORT_OPTIONS[0]
   if (sortVal) sortVal.textContent = opt.label
@@ -909,6 +918,25 @@ function rebuildGrid() {
 
 function shuffleItems() {
   applySort('shuffle')
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function switchVisibleBatch() {
+  const visible = state.items.filter(isItemVisible)
+  if (!visible.length) return
+
+  const renderedIds = new Set(Array.from(grid.querySelectorAll('.card')).map(card => card.dataset.id))
+  const fresh = shuffledCopy(visible.filter(item => !renderedIds.has(item.id)))
+  const old = shuffledCopy(visible.filter(item => renderedIds.has(item.id)))
+  const nextVisible = fresh.concat(old)
+  const nextIds = new Set(nextVisible.map(item => item.id))
+
+  state.items = nextVisible.concat(state.items.filter(item => !nextIds.has(item.id)))
+  state.sort = 'shuffle'
+  localStorage.setItem(SORT_KEY, state.sort)
+  state.playerIdx = -1
+  updateSortUI()
+  rebuildGrid()
   window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
@@ -1365,6 +1393,12 @@ document.addEventListener('keydown', e => {
   }
 
   /* ── Grid keyboard navigation (Arrow / Enter) ── */
+  if (e.ctrlKey && e.key === 'Enter' && !isTextInputTarget(e.target)) {
+    e.preventDefault()
+    switchVisibleBatch()
+    return
+  }
+
   if (e.key === 'Enter' && !isTextInputTarget(e.target)) {
     const sel = grid.querySelector('.card.kb-selected')
     if (sel) {

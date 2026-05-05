@@ -449,6 +449,7 @@ body {
   min-height: 65vh; text-align: center; padding: 40px 32px;
   animation: fadeUp .5s ease both;
 }
+.empty[hidden] { display: none; }
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(20px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -766,6 +767,7 @@ body {
   transition: opacity .25s ease;
 }
 .help-modal:not([hidden]) { opacity: 1; pointer-events: all; }
+.help-modal[hidden] { display: none; }
 .help-content {
   position: relative;
   max-width: 560px; max-height: 80vh;
